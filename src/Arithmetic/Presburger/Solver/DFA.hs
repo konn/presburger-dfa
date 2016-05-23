@@ -89,8 +89,42 @@ data Formula mode where
   (:=>) :: !(Formula m) -> !(Formula n) -> Formula 'Extended
   Ex    :: !Ident -> !(Formula m) -> Formula m
   Any   :: !Ident -> !(Formula m) -> Formula 'Extended
-deriving instance Show (Formula a)
-deriving instance Show (Expr a)
+
+instance Show (Expr m) where
+  showsPrec _ (Var i)    = shows i
+  showsPrec d (Num n)    = showsPrec d n
+  showsPrec d (v1 :+ v2) = showParen (d > 8) $
+    showsPrec 8 v1 . showString " + " . showsPrec 8 v2
+  showsPrec d (v1 :- v2) =
+    showParen (d > 8) $
+    showsPrec 8 v1 . showString " - " . showsPrec 9 v2
+  showsPrec d (n :* v2) =
+    showParen (d > 10) $
+    showsPrec 10 n . showString " " . showsPrec 10 v2
+
+instance Show (Formula a) where
+  showsPrec d (t1 :<= t2) = showParen (d > 7) $
+    showsPrec 4 t1 . showString " <= " . showsPrec 7 t2
+  showsPrec d (t1 :== t2) = showParen (d > 7) $
+    showsPrec 4 t1 . showString " = " . showsPrec 7 t2
+  showsPrec d (t1 :< t2) = showParen (d > 7) $
+    showsPrec 4 t1 . showString " < " . showsPrec 7 t2
+  showsPrec d (t1 :>= t2) = showParen (d > 7) $
+    showsPrec 4 t1 . showString " >= " . showsPrec 7 t2
+  showsPrec d (t1 :> t2) = showParen (d > 7) $
+    showsPrec 4 t1 . showString " > " . showsPrec 7 t2
+  showsPrec d (Not t) = showParen (d > 9) $
+    showString "~ " . showsPrec 9 t
+  showsPrec d (t1 :\/ t2) =
+    showParen (d > 2) $ showsPrec 2 t1 . showString " \\/ " . showsPrec 2 t2
+  showsPrec d (t1 :/\ t2) =
+    showParen (d > 3) $ showsPrec 3 t1 . showString " /\\ " . showsPrec 3 t2
+  showsPrec d (t1 :=> t2) =
+    showParen (d > 1) $ showsPrec 1 t1 . showString " => " . showsPrec 1 t2
+  showsPrec d (Ex i t2) = showParen (d > 4) $
+    showString "∃ " . shows i . showString ". " . showsPrec 4 t2
+  showsPrec d (Any i t2) = showParen (d > 4) $ undefined
+    showString "∀ " . shows i . showString ". " . showsPrec 4 t2
 
 fresh :: Vars f => f a -> Ident
 fresh f = Anonymous $ 1 + (maximum $ (-1) : [i | Anonymous i <- vars f])
@@ -438,11 +472,6 @@ determinize n@NFA{..} =
                               , l <- inputs
                               ]
   in DFA{..}
-
-{-
-transition :: Atomic -> MachineState -> Bits -> MachineState
-transition Atomic{..} q c = MachineState $ (getMachineState q - (coeffs .*. c)) `div` 2
--}
 
 quotient :: (Ord s, Ord c, Eq s, Hashable s) => DFA s c -> [HS.HashSet s] -> DFA s c
 quotient DFA{initial = ini, final = fs, transition = tr} (filter (not . HS.null) -> reps) =
