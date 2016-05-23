@@ -122,8 +122,8 @@ buildDFA' vdic  (a :<= b) =
   in renumberStates $ atomicToDFA $ Atomic (V.fromList cfs) ub
 buildDFA' vdic (Not t) = complement $ buildDFA' vdic t
 buildDFA' vdic (t1 :/\ t2) =
-  let d1 = buildDFA' vdic $ unsafeCoerce t1
-      d2 = buildDFA' vdic $ unsafeCoerce t2
+  let d1 = buildDFA' vdic (encode t1)
+      d2 = buildDFA' vdic (encode t2)
   in renumberStates $ minimize $ d1 `intersection` d2
 buildDFA' vdic (Ex v t)
   | v `notElem` vars t = buildDFA' vdic t
@@ -190,7 +190,7 @@ getIdx ident = gets (M.lookup ident . snd) >>= \case
     put (i+1, M.insert ident i dic)
     return i
 
-instance Num (Expr 'Extended) where
+instance Num (Expr a) where
   fromInteger = Num . fromInteger
   (+) = (:+)
   Num n * b = n :* b
@@ -200,10 +200,11 @@ instance Num (Expr 'Extended) where
   signum (Num 0) = 0
   signum _ = 1
 
+  negate (Var i)  = (-1) :* Var i
   negate (n :* m) = negate n :* m
   negate (Num n)  = Num (negate n)
-  negate (n :+ m) = negate (unsafeCoerce n :: Expr 'Extended) :+ negate (unsafeCoerce m :: Expr 'Extended)
-  negate _ = error "Not supported!"
+  negate (n :+ m) = negate n :+ negate m
+  negate (n :- m) = m :- n
 
 class Encodable f where
   encode :: f m -> f 'Raw
