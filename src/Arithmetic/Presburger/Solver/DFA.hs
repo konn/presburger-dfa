@@ -5,9 +5,8 @@
 {-# LANGUAGE TupleSections, TypeFamilies, TypeOperators, ViewPatterns      #-}
 {-# OPTIONS_GHC -funbox-strict-fields #-}
 module Arithmetic.Presburger.Solver.DFA where
-import Control.Arrow (first, second)
-import Control.Monad (filterM, forM_, unless)
-
+import           Control.Arrow                    (first, second)
+import           Control.Monad                    (filterM, forM_, unless)
 import           Control.Monad.Trans.State.Strict (State, execState, get, gets)
 import           Control.Monad.Trans.State.Strict (modify, put)
 import           Data.Data                        (Data)
@@ -16,27 +15,21 @@ import           Data.Foldable                    (toList)
 import           Data.Hashable                    (Hashable)
 import qualified Data.HashMap.Strict              as HM
 import qualified Data.HashSet                     as HS
-import           Data.List                        (delete, nub, sort, transpose)
-import           Data.List                        (partition)
+import           Data.List                        (delete, minimumBy, nub)
+import           Data.List                        (partition, sort, transpose)
 import           Data.List                        (unfoldr)
-
-import Data.List (minimumBy)
-
-import qualified Data.Map.Strict    as M
-import           Data.Maybe         (fromJust, fromMaybe)
-import           Data.Maybe         (mapMaybe, maybeToList)
-import           Data.Monoid        (First (..))
-import           Data.Ord           (comparing)
-import qualified Data.Sequence      as S
-import           Data.Traversable   (for)
-import           Data.Type.Equality ((:~:) (..))
-import           Data.Typeable      (Typeable)
-import           Data.Vector        (Vector)
-import qualified Data.Vector        as V
-import           Debug.Trace        (trace)
-import           GHC.Generics       (Generic)
-import           Unsafe.Coerce      (unsafeCoerce)
-
+import qualified Data.Map.Strict                  as M
+import           Data.Maybe                       (fromJust, fromMaybe)
+import           Data.Maybe                       (mapMaybe, maybeToList)
+import           Data.Monoid                      (First (..))
+import           Data.Ord                         (comparing)
+import qualified Data.Sequence                    as S
+import           Data.Traversable                 (for)
+import           Data.Typeable                    (Typeable)
+import           Data.Vector                      (Vector)
+import qualified Data.Vector                      as V
+import           Debug.Trace                      (trace)
+import           GHC.Generics                     (Generic)
 
 data Ident = Ident { getIdent :: String }
            | Anonymous { getAnon :: !Int }
@@ -245,14 +238,6 @@ instance Vars Formula where
   vars (m1 :=> m2) = nub $ vars m1 ++ vars m2
   vars (Ex v m)    = delete v $ vars m
   vars (Any v m)   = delete v $ vars m
-
-data SMode m where
-  SRaw     :: SMode 'Raw
-  SExtended :: SMode 'Extended
-
-switchIdemp' :: SMode a -> Switch a a :~: a
-switchIdemp' SRaw = Refl
-switchIdemp' SExtended = Refl
 
 instance Encodable Formula where
   encode (Not  p)   = Not (encode p)
