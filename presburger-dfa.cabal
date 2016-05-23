@@ -16,6 +16,8 @@ cabal-version:       >=1.10
 library
   hs-source-dirs:      src
   exposed-modules:     Arithmetic.Presburger.Solver.DFA
+  other-modules:       Arithmetic.Presburger.Solver.DFA.Automata
+                     , Arithmetic.Presburger.Solver.DFA.Types
   build-depends:       base >= 4.7 && < 5
                      , uniplate
                      , vector

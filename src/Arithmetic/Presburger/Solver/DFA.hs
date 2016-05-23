@@ -4,64 +4,80 @@
 {-# LANGUAGE RecordWildCards, ScopedTypeVariables, StandaloneDeriving      #-}
 {-# LANGUAGE TupleSections, TypeFamilies, TypeOperators, ViewPatterns      #-}
 {-# OPTIONS_GHC -funbox-strict-fields #-}
-module Arithmetic.Presburger.Solver.DFA where
-import           Control.Arrow                    (first, second)
-import           Control.Monad                    (filterM, forM_, unless)
+module Arithmetic.Presburger.Solver.DFA
+       ( -- * Types
+         Expr(..), Formula(..), Ident (Ident), Valuation,
+         liftFormula,
+         -- * Solvers
+         solve, isTautology, satisfiable, entail, getAllSolutions,
+         -- * Internal functions and data-types
+         buildDFA, decodeSolution, DFA(..), encode) where
+import Arithmetic.Presburger.Solver.DFA.Automata
+import Arithmetic.Presburger.Solver.DFA.Types
+
+import           Control.Applicative              (Alternative)
+import           Control.Arrow                    (first)
 import           Control.Monad.Trans.State.Strict (State, execState, get, gets)
-import           Control.Monad.Trans.State.Strict (modify, put)
-import           Data.Data                        (Data)
+import           Control.Monad.Trans.State.Strict (put)
 import           Data.Either                      (partitionEithers)
-import           Data.Foldable                    (toList)
+import           Data.Foldable                    (asum, toList)
 import           Data.Hashable                    (Hashable)
-import qualified Data.HashMap.Strict              as HM
 import qualified Data.HashSet                     as HS
-import           Data.List                        (delete, minimumBy, nub)
-import           Data.List                        (partition, sort, transpose)
-import           Data.List                        (unfoldr)
+import           Data.List                        (nub, sort, transpose)
 import qualified Data.Map.Strict                  as M
-import           Data.Maybe                       (fromJust, fromMaybe)
-import           Data.Maybe                       (mapMaybe, maybeToList)
-import           Data.Monoid                      (First (..))
-import           Data.Ord                         (comparing)
-import qualified Data.Sequence                    as S
-import           Data.Traversable                 (for)
-import           Data.Typeable                    (Typeable)
+import           Data.Maybe                       (fromMaybe, isJust)
 import           Data.Vector                      (Vector)
 import qualified Data.Vector                      as V
-import           Debug.Trace                      (trace)
-import           GHC.Generics                     (Generic)
+import           Unsafe.Coerce                    (unsafeCoerce)
 
-data Ident = Ident { getIdent :: String }
-           | Anonymous { getAnon :: !Int }
-           deriving (Generic, Data, Typeable,Eq, Ord)
+type Valuation = M.Map Ident Integer
 
-instance Show Ident where
-  show (Ident x) = x
-  show (Anonymous i) = "_[" ++ show i ++ "]"
 
-data Bit = O | I
-         deriving (Read, Show, Eq, Ord)
+-- | @'entail' [f1, ..., fn] [g1, ..., gm]@ proves @f1 :/\ ... :/\ fn :==> g1 :\/ ... :\/ gm@.
+entail :: [Formula n] -> [Formula m] -> Bool
+entail prem goal = isTautology (foldr1 (:/\) prem :=> foldl1 (:\/) goal)
 
-data Mode = Raw | Extended
-          deriving (Read, Show, Eq, Ord)
+-- | Test if given formula is tautology.
+isTautology :: Formula m -> Bool
+isTautology = null . flip asTypeOf [] . solve . Not
 
-type family Switch m n where
-  Switch 'Raw m = m
-  Switch 'Extended  m = 'Extended
-  Switch a a = a
-
-solve :: Formula m -> [M.Map Ident Integer]
+-- | @'solve phi'@ finds solutions for formula phi.
+solve :: Alternative f => Formula m -> f Valuation
 solve f =
   let (targ, vdic) = buildDFA $ encode f
       len = M.size vdic
-  in map (\sol -> fmap ((sol !!) . fromInteger) vdic) $ getSolution len targ
+  in asum $ map pure $ nub $ map (\sol -> fmap ((sol !!) . fromInteger) vdic) $ getSolution len targ
+{-# INLINE solve #-}
 
-data Expr mode where
-  Var  :: !Ident -> Expr a
-  Num  :: !Integer  -> Expr a
-  (:+) :: !(Expr m) -> !(Expr n) -> Expr (Switch m n)
-  (:-) :: !(Expr m) -> !(Expr n) -> Expr 'Extended
-  (:*) :: !Integer  -> !(Expr m) -> Expr m
+satisfiable :: Formula m -> Bool
+satisfiable = isJust . solve
+
+-- | Find solutions consecutively applying @'solve'@.
+--   N.B. This is SO slow.
+getAllSolutions :: Formula m -> [Valuation]
+getAllSolutions = loop
+  where
+    loop f =
+      let sols = solve (minimized f)
+      in if null sols
+         then []
+         else sols ++ loop (foldr (:/\) f $ concatMap toConstr sols)
+{-# INLINE getAllSolutions #-}
+
+liftFormula :: Formula e -> Formula 'Extended
+liftFormula = unsafeCoerce
+
+toConstr :: Valuation -> [Formula 'Raw]
+toConstr dic = [ Not ((Var a :: Expr 'Raw) :== Num b) | (a, b) <- M.toList dic ]
+
+-- | Minimizing operator
+leastSuch :: Ident -> Formula m -> Formula 'Extended
+leastSuch v f =
+  let x = fresh f
+  in f :/\ Any x (Var x :< Var v :=> Not (subst v x f))
+
+minimized :: Formula m -> Formula 'Extended
+minimized f = foldr ((.) . leastSuch) id (vars f) (liftFormula f)
 
 type Summand = Either Integer (Ident, Integer)
 
@@ -77,58 +93,6 @@ summands (Var t) = [Right (t, 1)]
 summands (Num t) = [Left t]
 summands (t1 :+ t2) = summands t1 ++ summands t2
 
-data Formula mode where
-  (:<=) :: !(Expr a) -> !(Expr a) -> Formula a
-  (:==) :: !(Expr a) -> !(Expr b) -> Formula 'Extended
-  (:<)  :: !(Expr a) -> !(Expr b) -> Formula 'Extended
-  (:>=) :: !(Expr a) -> !(Expr b) -> Formula 'Extended
-  (:>)  :: !(Expr a) -> !(Expr b) -> Formula 'Extended
-  Not   :: !(Formula m) -> Formula m
-  (:\/) :: !(Formula m) -> !(Formula n) -> Formula 'Extended
-  (:/\) :: !(Formula m) -> !(Formula n) -> Formula (Switch m n)
-  (:=>) :: !(Formula m) -> !(Formula n) -> Formula 'Extended
-  Ex    :: !Ident -> !(Formula m) -> Formula m
-  Any   :: !Ident -> !(Formula m) -> Formula 'Extended
-
-instance Show (Expr m) where
-  showsPrec _ (Var i)    = shows i
-  showsPrec d (Num n)    = showsPrec d n
-  showsPrec d (v1 :+ v2) = showParen (d > 8) $
-    showsPrec 8 v1 . showString " + " . showsPrec 8 v2
-  showsPrec d (v1 :- v2) =
-    showParen (d > 8) $
-    showsPrec 8 v1 . showString " - " . showsPrec 9 v2
-  showsPrec d (n :* v2) =
-    showParen (d > 10) $
-    showsPrec 10 n . showString " " . showsPrec 10 v2
-
-instance Show (Formula a) where
-  showsPrec d (t1 :<= t2) = showParen (d > 7) $
-    showsPrec 4 t1 . showString " <= " . showsPrec 7 t2
-  showsPrec d (t1 :== t2) = showParen (d > 7) $
-    showsPrec 4 t1 . showString " = " . showsPrec 7 t2
-  showsPrec d (t1 :< t2) = showParen (d > 7) $
-    showsPrec 4 t1 . showString " < " . showsPrec 7 t2
-  showsPrec d (t1 :>= t2) = showParen (d > 7) $
-    showsPrec 4 t1 . showString " >= " . showsPrec 7 t2
-  showsPrec d (t1 :> t2) = showParen (d > 7) $
-    showsPrec 4 t1 . showString " > " . showsPrec 7 t2
-  showsPrec d (Not t) = showParen (d > 9) $
-    showString "~ " . showsPrec 9 t
-  showsPrec d (t1 :\/ t2) =
-    showParen (d > 2) $ showsPrec 2 t1 . showString " \\/ " . showsPrec 2 t2
-  showsPrec d (t1 :/\ t2) =
-    showParen (d > 3) $ showsPrec 3 t1 . showString " /\\ " . showsPrec 3 t2
-  showsPrec d (t1 :=> t2) =
-    showParen (d > 1) $ showsPrec 1 t1 . showString " => " . showsPrec 1 t2
-  showsPrec d (Ex i t2) = showParen (d > 4) $
-    showString "∃ " . shows i . showString ". " . showsPrec 4 t2
-  showsPrec d (Any i t2) = showParen (d > 4) $ undefined
-    showString "∀ " . shows i . showString ". " . showsPrec 4 t2
-
-fresh :: Vars f => f a -> Ident
-fresh f = Anonymous $ 1 + (maximum $ (-1) : [i | Anonymous i <- vars f])
-
 type Index = Integer
 type VarDic = M.Map Ident Integer
 
@@ -137,21 +101,33 @@ buildDFA f =
   let (_, varDic) = execState (mapM getIdx $ sort (vars f)) (0, M.empty)
   in (buildDFA' varDic f, varDic)
 
-buildDFA' :: VarDic -> Formula 'Raw -> DFA Integer Bits
-buildDFA' vdic  (a :<= b) =
+toAtomic :: M.Map Ident Integer -> Expr mode1 -> Expr mode -> Atomic
+toAtomic vdic a b =
   let (nb, pxs) = partitionEithers (summands a)
       (pb, nxs) = partitionEithers (summands b)
       cfs0 = M.unionWith (+) (M.fromList pxs) (fmap negate $ M.fromList nxs)
       ub = sum pb - sum nb
-      len = toInteger $ M.size vdic
+      len = M.size vdic
       cds = map (first (vdic M.!)) $ M.toList cfs0
-      cfs = [fromMaybe 0 (lookup i cds) | i <- [0..len-1] ]
-  in renumberStates $ atomicToDFA $ Atomic (V.fromList cfs) ub
+      cfs = V.generate len $ \i -> fromMaybe 0 (lookup (toInteger i) cds)
+  in Atomic cfs ub
+
+buildDFA' :: VarDic -> Formula 'Raw -> DFA Integer Bits
+buildDFA' vdic  (a :<= b) =
+  let atomic = toAtomic vdic a b
+  in renumberStates $ leqToDFA atomic
+buildDFA' vdic  (a :== b) =
+  let atomic = toAtomic vdic a b
+  in renumberStates $ eqToDFA atomic
 buildDFA' vdic (Not t) = complement $ buildDFA' vdic t
 buildDFA' vdic (t1 :/\ t2) =
   let d1 = buildDFA' vdic (encode t1)
       d2 = buildDFA' vdic (encode t2)
   in renumberStates $ minimize $ d1 `intersection` d2
+buildDFA' vdic (t1 :\/ t2) =
+  let d1 = buildDFA' vdic (encode t1)
+      d2 = buildDFA' vdic (encode t2)
+  in renumberStates $ minimize $ d1 `join` d2
 buildDFA' vdic (Ex v t)
   | v `notElem` vars t = buildDFA' vdic t
   | otherwise =
@@ -162,42 +138,21 @@ buildDFA' vdic (Ex v t)
        minimize $ renumberStates $ determinize $
        projDFA $ changeLetter (splitNth idx) dfa
 
-class Subst f where
-  subst :: Ident -> Ident -> f a -> f a
+fresh :: Formula a -> Ident
+fresh e = Anonymous $ 1 + maximum ((-1) : [i | Anonymous i <- allVarsF e])
 
-instance Subst Expr where
-  subst old new (Var e)
-    | e == old  = Var new
-    | otherwise = Var e
-  subst _   _   (Num e) = Num e
-  subst old new (e1 :+ e2) = subst old new e1 :+ subst old new e2
-  subst old new (e1 :- e2) = subst old new e1 :- subst old new e2
-  subst old new (e1 :* e2) = e1 :* subst old new e2
-
-instance Subst Formula where
-  subst old new (e1 :<= e2) = subst old new e1 :<= subst old new e2
-  subst old new (e1 :== e2) = subst old new e1 :== subst old new e2
-  subst old new (e1 :< e2)  = subst old new e1 :<  subst old new e2
-  subst old new (e1 :>= e2) = subst old new e1 :>= subst old new e2
-  subst old new (e1 :> e2)  = subst old new e1 :> subst old new e2
-  subst old new (Not e)     = Not (subst old new e)
-  subst old new (e1 :\/ e2) = subst old new e1 :\/  subst old new e2
-  subst old new (e1 :/\ e2) = subst old new e1 :/\  subst old new e2
-  subst old new (e1 :=> e2) = subst old new e1 :=>  subst old new e2
-  subst old new (Ex v e)
-    | old == v  = Ex v e
-    | otherwise = Ex v (subst old new e)
-  subst old new (Any v e)
-    | old == v  = Any v e
-    | otherwise = Any v (subst old new e)
-
-tracing :: Show a => String -> a -> a
-tracing lab a = trace (concat [lab, ": ", show a]) a
-
-changeLetter :: (Ord s, Ord d) => (c -> d) -> DFA s c -> DFA s d
-changeLetter f DFA{transition = ts, ..} =
-  let transition = M.mapKeys (second f) ts
-  in DFA{..}
+allVarsF :: Formula a -> [Ident]
+allVarsF (e1 :<= e2) = nub $ vars e1 ++ vars e2
+allVarsF (e1 :== e2) = nub $ vars e1 ++ vars e2
+allVarsF (e1 :< e2) = nub $ vars e1 ++ vars e2
+allVarsF (e1 :>= e2) =  nub $ vars e1 ++ vars e2
+allVarsF (e1 :> e2) = nub $ vars e1 ++ vars e2
+allVarsF (Not e) = allVarsF e
+allVarsF (e1 :\/ e2) = nub $ allVarsF e1 ++ allVarsF e2
+allVarsF (e1 :/\ e2) = nub $ allVarsF e1 ++ allVarsF e2
+allVarsF (e1 :=> e2) = nub $ allVarsF e1 ++ allVarsF e2
+allVarsF (Ex e1 e2) = nub $ e1 : allVarsF e2
+allVarsF (Any e1 e2) = nub $ e1 : allVarsF e2
 
 splitNth :: Integer -> Vector a -> ((Vector a, Vector a), a)
 splitNth n v =
@@ -205,9 +160,6 @@ splitNth n v =
   in ((hd, V.tail tl), V.head tl)
 
 type BuildingEnv = (Index, M.Map Ident Index)
-
-currentLen :: State BuildingEnv Index
-currentLen = gets fst
 
 getIdx :: Ident -> State BuildingEnv Index
 getIdx ident = gets (M.lookup ident . snd) >>= \case
@@ -217,132 +169,24 @@ getIdx ident = gets (M.lookup ident . snd) >>= \case
     put (i+1, M.insert ident i dic)
     return i
 
-instance Num (Expr a) where
-  fromInteger = Num . fromInteger
-  (+) = (:+)
-  Num n * b = n :* b
-  a * Num m = m :* a
-  _ * _     = error "At least one of factor must be constant!"
-  abs = id
-  signum (Num 0) = 0
-  signum _ = 1
-
-  negate (Var i)  = (-1) :* Var i
-  negate (n :* m) = negate n :* m
-  negate (Num n)  = Num (negate n)
-  negate (n :+ m) = negate n :+ negate m
-  negate (n :- m) = m :- n
-
-class Encodable f where
-  encode :: f m -> f 'Raw
-
-instance Encodable Expr where
-  encode (Var v) = Var v
-  encode (n :- m) = encode $ n :+ (-1) :* m
-  encode (Num i) = Num i
-  encode (n :+ m) = encode n :+ encode m
-  encode (n :* m) = n :* encode m
-
-infixl 6 :+, :-
-infixr 7 :*
-infixr 3 :/\
-infixr 2 :\/
-infixr 1 :=>
-infix  4 :<=, :>=, :<, :>, :==
-
-class Vars f where
-  vars :: f a -> [Ident]
-
-instance Vars Expr where
-  vars (Var v)  = [v]
-  vars (a :+ b) = nub $ vars a ++ vars b
-  vars (a :- b) = nub $ vars a ++ vars b
-  vars (_ :* b) = vars b
-  vars (Num _)  = []
-
-instance Vars Formula where
-  vars (m1 :<= m2) = nub $ vars m1 ++ vars m2
-  vars (m1 :== m2) = nub $ vars m1 ++ vars m2
-  vars (m1 :< m2)  = nub $ vars m1 ++ vars m2
-  vars (m1 :>= m2) = nub $ vars m1 ++ vars m2
-  vars (m1 :> m2)  = nub $ vars m1 ++ vars m2
-  vars (Not m)     = vars m
-  vars (m1 :\/ m2) = nub $ vars m1 ++ vars m2
-  vars (m1 :/\ m2) = nub $ vars m1 ++ vars m2
-  vars (m1 :=> m2) = nub $ vars m1 ++ vars m2
-  vars (Ex v m)    = delete v $ vars m
-  vars (Any v m)   = delete v $ vars m
-
-instance Encodable Formula where
-  encode (Not  p)   = Not (encode p)
-  encode (p :/\ q)  = encode p :/\ encode q
-  encode (p :\/ q)  = Not (Not (encode p) :/\ Not (encode q))
-  encode (p :=> q)  = encode $ Not (encode p) :\/ encode q
-  encode (Ex   v p) = Ex v (encode p)
-  encode (Any  v p) = Not $ Ex v $ Not (encode p)
-  encode (n :<= m)  = encode n :<= encode m
-  encode (n :>= m)  = encode m :<= encode n
-  encode (n :== m)  =
-    let (n', m') = (encode n, encode m)
-    in encode (n' :<= m' :/\ n' :>= m')
-  encode (m :<  n)  =
-    let (m', n') = (encode m, encode n)
-    in encode $ m' :<= n' :/\ Not (m' :== n')
-  encode (m :>  n)  = encode $ n :< m
-
-
-(.*) :: Integer -> Bit -> Integer
-a .* I = a
-_ .* O = 0
-{-# INLINE (.*) #-}
-
-(.*.) :: Vector Integer -> Vector Bit -> Integer
-as .*. bs = V.sum $ V.zipWith (.*) as bs
-
 
 data Atomic = Atomic { coeffs     :: Vector Integer
                      , upperBound :: Integer
                      }
                 deriving (Read, Show, Eq, Ord)
 
-type Bits = Vector Bit
-
 type MachineState  = Integer
 
-states :: (Eq s, Hashable s) => DFA s c -> HS.HashSet s
-states DFA{..} = HS.fromList $ initial : concat [[t,s] | ((t, _), s) <- M.toList transition]
+eqToDFA ::  Atomic -> DFA MachineState Bits
+eqToDFA a@Atomic{..} = atomicToDFA (== 0) (\k xi -> even (k - coeffs .*. xi)) a
 
-data DFA s c = DFA { initial    :: s
-                   , final      :: HS.HashSet s
-                   , transition :: M.Map (s, c) s
-                   } deriving (Show, Eq)
+leqToDFA :: Atomic -> DFA MachineState Bits
+leqToDFA = atomicToDFA (>= 0) (const $ const True)
 
-isFinal :: (Eq a, Hashable a) => DFA a c -> a -> Bool
-isFinal DFA{..} q = q `HS.member` final
-
-intersection :: (Eq c, Ord c, Hashable a, Hashable b, Ord a, Ord b) => DFA a c -> DFA b c -> DFA Integer c
-intersection d1 d2 =
-  let ss = HS.fromList [(s, t)
-           | s <- HS.toList (states d1)
-           , t <- HS.toList (states d2)
-           ]
-      dic = HM.fromList [(st, i) | st <- HS.toList ss | i <- [0..]]
-      inputs = nub $ map snd (M.keys $ transition d1) ++ map snd (M.keys $ transition d2)
-      trans = M.fromList [ ((dic HM.! (s, t), l), dic HM.! (s', t'))
-                         | l <- inputs
-                         , (s, t) <- HS.toList ss
-                         , s' <- maybeToList (feed d1 s l)
-                         , t' <- maybeToList (feed d2 t l)
-                         ]
-      fs = HS.fromList [dic HM.!(s, t) | s <- HS.toList (final d1)
-                                       , t <- HS.toList (final d2)]
-  in DFA{ initial = dic HM.! (initial d1, initial d2)
-                 , transition = trans
-                 , final = fs
-                 }
-
-atomicToDFA :: Atomic -> DFA MachineState Bits
-atomicToDFA Atomic{..} = minimize $ loop [upperBound] HS.empty
+atomicToDFA :: (Integer -> Bool)               -- ^ Is final state?
+            -> (Integer -> Vector Bit -> Bool) -- ^ Candidate reducer
+            -> Atomic -> DFA Integer (Vector Bit)
+atomicToDFA chkFinal reduce Atomic{..} = minimize $ loop [upperBound] HS.empty
                    DFA{ initial = upperBound
                       , transition = M.empty
                       , final = HS.empty
@@ -350,18 +194,19 @@ atomicToDFA Atomic{..} = minimize $ loop [upperBound] HS.empty
   where
     inputs = V.replicateM (V.length coeffs) [O, I]
     loop [] _ dfa = dfa
-    loop (q : qs) seen d =
-      let (dfa', seen', qs') = foldr step (d, seen, qs) inputs
+    loop (q : qs) seen d@DFA{final = fs} =
+      let fs' | chkFinal q = HS.insert q fs
+              | otherwise  = fs
+          (dfa', seen', qs') =
+            foldr step (d { final = fs' }, seen, qs) $
+            filter (reduce q) inputs
       in loop qs' seen'  dfa'
       where
         step i (DFA{..}, sn, ps) =
           let j = (q - (coeffs .*. i))`div` 2
               ps' | HS.member j sn = ps
                   | otherwise = j : ps
-              fs  | j >= 0 = HS.insert j final
-                  | otherwise = final
           in (DFA{ transition = M.insert (q, i) j transition
-                 , final = fs
                  , ..}, HS.insert j sn, ps')
 
 bitToInt :: Bit -> Integer
@@ -369,149 +214,13 @@ bitToInt O = 0
 bitToInt I = 1
 {-# INLINE bitToInt #-}
 
-newtype PathTable
-  = PathTable { pathTable :: HM.HashMap MachineState (HM.HashMap MachineState (S.Seq Bits)) }
-
 decodeSolution :: Int -> [Vector Bit] -> [Integer]
 decodeSolution len vs
   | null vs = replicate len 0
   | otherwise = map (foldr (\a b -> bitToInt a + 2*b) 0) $ transpose $ map V.toList vs
-
-getElem :: Foldable t =>  t a -> a
-getElem = fromJust . getFirst . foldMap (First . Just)
-
-walk :: (Ord c, Ord q) => DFA q c -> M.Map q (S.Seq c)
-walk d@DFA{..} = execState (visit S.empty initial) M.empty
-  where
-    visit !s !q = do
-      modify $ M.insert q s
-      forM_ (letters d) $ \i -> for (feed d q i) $ \q' -> do
-        visited <- gets (M.member q')
-        unless visited $ visit (s S.|> i) q'
-    {-# INLINE visit #-}
-{-# INLINE walk #-}
-
-letters :: Eq a => DFA a1 a -> [a]
-letters DFA{transition} = nub $ map snd $ M.keys transition
-{-# INLINE letters #-}
 
 getSolution :: (Ord a, Hashable a) => Int -> DFA a (Vector Bit) -> [[Integer]]
 getSolution l dfa =
   let ss = walk dfa
   in map (decodeSolution l . toList . snd) $ M.toList $
      M.filterWithKey (\k _ -> isFinal dfa k) ss
-
-minimize :: (Ord c, Ord q, Hashable q) => DFA q c -> DFA q c
-minimize dfa =
-  let reps = partiteDFA dfa
-  in discardRedundant $ quotient dfa reps
-
-discardRedundant :: (Ord s, Ord c, Eq s, Hashable s) => DFA s c -> DFA s c
-discardRedundant d@DFA{final = fs, transition = tr, initial} =
-  let reachable = HS.fromList (M.keys (walk d))
-      final = fs `HS.intersection` reachable
-      transition = M.filterWithKey (\(a, _) b -> all (`HS.member` reachable) [a, b]) tr
-  in DFA{..}
-
-groupByValue :: (Ord a, Eq v) => M.Map a v -> M.Map a a
-groupByValue dic
-    | Just ((k, v), xs) <- M.minViewWithKey dic
-    = let (d0, rest) = M.partition (== v) xs
-      in M.insert k k $ fmap (const k) d0 `M.union` groupByValue rest
-    | otherwise = M.empty
-
-complement :: (Ord q, Ord c, Hashable q, Eq q) => DFA q c -> DFA q c
-complement d@DFA{..} = minimize $ d { final = states d `HS.difference`  final }
-
-feed :: (Ord c, Ord q) => DFA q c -> q -> c -> Maybe q
-feed DFA{..} q i =
-  M.lookup (q, i) transition
-
-data NFA s c = NFA { initialNFA    :: s
-                   , finalNFA      :: HS.HashSet s
-                   , transitionNFA :: M.Map (s, c) (HS.HashSet s)
-                   } deriving (Show, Eq)
-
-
-
-projDFA :: (Ord a, Ord s, Hashable s) => DFA s (a, b) -> NFA s a
-projDFA DFA{..} =
-  let finalNFA      = final
-      initialNFA    = initial
-      transitionNFA = M.mapKeysWith HS.union (\(s, l) -> (s, fst l)) $
-                      fmap HS.singleton transition
-  in NFA{..}
-
-dropNth :: Int -> Vector a -> Vector a
-dropNth n v =
-  let (vs, us) = V.splitAt n v
-  in vs V.++ V.drop 1 us
-
-renumberStates :: (Enum s, Eq a, Num s, Ord s, Ord c, Hashable a, Hashable s) => DFA a c -> DFA s c
-renumberStates dfa@DFA{initial = ini, final = fs, transition = trans} =
-  let ss = states dfa
-      idxDic = HM.fromList $ zip (HS.toList $ HS.insert ini ss) [0..]
-      initial = idxDic HM.! ini
-      final   = HS.map (idxDic HM.!) $ fs `HS.intersection` HS.insert ini ss
-      transition = M.mapKeys (first (idxDic HM.!)) $ fmap (idxDic HM.!) trans
-  in DFA{..}
-
-statesNFA :: (Eq a, Hashable a) => NFA a t -> HS.HashSet a
-statesNFA NFA{..} = HS.fromList $ initialNFA : concat [t : HS.toList s | ((t, _), s) <- M.toList transitionNFA]
-
--- | Naive Subset construction
-determinize :: (Ord c, Eq s, Hashable s, Ord s) => NFA s c -> DFA [s] c
-determinize n@NFA{..} =
-  let sts  = HS.fromList $ map sort $ filterM (const [True, False]) $ HS.toList $ statesNFA n
-      final   = HS.filter (any (`HS.member` finalNFA)) sts
-      initial = [initialNFA]
-      inputs  = nub $ map snd $ M.keys transitionNFA
-      transition = M.fromList [((ss, l), nub $ sort $ concat $ mapMaybe (\s -> HS.toList <$> M.lookup (s, l) transitionNFA) $
-                                         ss)
-                              | ss <- HS.toList sts
-                              , l <- inputs
-                              ]
-  in DFA{..}
-
-quotient :: (Ord s, Ord c, Eq s, Hashable s) => DFA s c -> [HS.HashSet s] -> DFA s c
-quotient DFA{initial = ini, final = fs, transition = tr} (filter (not . HS.null) -> reps) =
-  let dic = HM.fromList [(s, getElem r) | r <- reps, s <- HS.toList r]
-      look v = fromMaybe v $ HM.lookup v dic
-      initial = look ini
-      final = HS.map look fs
-      transition = M.mapKeys (first look) $ fmap look tr
-  in DFA{..}
-
-partiteDFA :: (Ord s, Ord c, Eq s, Hashable s) => DFA s c -> [HS.HashSet s]
-partiteDFA d@DFA{..}
-  | null final || states d == final = [states d]
-  | otherwise =
-    let (fs, qs) = (final, states d `HS.difference` final)
-    in loop [(l, smaller fs qs) | l <- chars] [fs, qs]
-  where
-    chars = letters d
-    split (c, b') b =
-      let (b0, b1) = partition (maybe False (flip HS.member b') . flip (feed d) c) $ toList b
-      in if null b0 || null b1
-      then Nothing
-      else Just (HS.fromList b0, HS.fromList b1)
-    loop [] qs = qs
-    loop ((a, b') : ws) ps =
-      let (ws', ps') = foldr step (ws, []) ps
-          step b (wsc, psc) =
-            case split (a, b') b of
-              Nothing       -> (wsc, b : psc)
-              Just (b0, b1) ->
-                let refine c ww
-                      | (xs, _ : ys) <- break (== (c, b)) ww = (c, b0) : (c, b1) : xs ++ ys
-                      | otherwise = (c, smaller b0 b1)  : ww
-                in (foldr refine wsc chars, [b0, b1])
-      in loop ws' (ps')
-
-smaller :: HS.HashSet a -> HS.HashSet a -> HS.HashSet a
-smaller s t = minimumBy (comparing HS.size) [s, t]
-
-combinations :: [b] -> [(b, b)]
-combinations =
-  concat . unfoldr (\case { [] -> Nothing ; (a: as) -> Just (zip (repeat a) as, as)})
-
