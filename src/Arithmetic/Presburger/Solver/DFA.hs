@@ -7,9 +7,9 @@
 module Arithmetic.Presburger.Solver.DFA
        ( -- * Types
          Expr(..), Formula(..), Ident (Ident), Solution, Validity(..),
-         liftFormula,
+         liftFormula, substitute, Mode(..),
          -- * Solvers
-         solve, isTautology, satisfiable, entail, getAllSolutions,
+         solve, isTautology, satisfiable, entail, leastSuch, minimized,
          -- * Internal functions and data-types
          buildDFA, buildDFAWith, getDFASolution,
          decodeSolution, DFA(..), encode, Bit(..)) where
@@ -71,19 +71,6 @@ solve f =
 satisfiable :: Formula m -> Bool
 satisfiable = isJust . solve
 
--- | Find solutions consecutively applying @'solve'@.
---   N.B. This is SO slow.
---
---   Since 0.1.0.0
-getAllSolutions :: Formula m -> [Solution]
-getAllSolutions = loop
-  where
-    loop f =
-      let sols = solve (minimized f)
-      in if null sols
-         then []
-         else sols ++ loop (foldr (:/\) f $ concatMap toConstr sols)
-{-# INLINE getAllSolutions #-}
 
 liftFormula :: Formula e -> Formula 'Extended
 liftFormula = unsafeCoerce
@@ -254,6 +241,13 @@ bitToInt :: Bit -> Integer
 bitToInt O = 0
 bitToInt I = 1
 {-# INLINE bitToInt #-}
+
+substitute :: Solution -> Expr a -> Integer
+substitute dic (Var e) = fromMaybe 0 $ M.lookup e dic
+substitute _ (Num e) = e
+substitute dic (e1 :+ e2) = substitute dic e1 + substitute dic e2
+substitute dic (e1 :- e2) = substitute dic e1 - substitute dic e2
+substitute dic (e1 :* e2) = e1 * substitute dic e2
 
 decodeSolution :: VarDic -> [Vector Bit] -> Solution
 decodeSolution vdic vs
