@@ -107,25 +107,6 @@ instance Vars Formula where
   vars (Ex v m)    = delete v $ vars m
   vars (Any v m)   = delete v $ vars m
 
-class Encodable f where
-  encode :: f m -> f 'Raw
-
-instance Encodable Formula where
-  encode (Not  p)   = Not (encode p)
-  encode (p :/\ q)  = encode p :/\ encode q
-  encode (p :\/ q)  = Not (Not (encode p) :/\ Not (encode q))
-  encode (p :=> q)  = encode $ Not (encode p) :\/ encode q
-  encode (Ex   v p) = Ex v (encode p)
-  encode (Any  v p) = Not $ Ex v $ Not (encode p)
-  encode (n :<= m)  = encode n :<= encode m
-  encode (n :>= m)  = encode m :<= encode n
-  encode (n :== m)  =
-    let (n', m') = (encode n, encode m)
-    in encode (n' :<= m' :/\ n' :>= m')
-  encode (m :<  n)  =
-    let (m', n') = (encode m, encode n)
-    in encode $ m' :<= n' :/\ Not (m' :== n')
-  encode (m :>  n)  = encode $ n :< m
 
 instance Show (Expr m) where
   showsPrec _ (Var i)    = shows i
@@ -180,14 +161,6 @@ instance Num (Expr a) where
   negate (n :+ m) = negate n :+ negate m
   negate (n :- m) = m :- n
 
-
-instance Encodable Expr where
-  encode (Var v) = Var v
-  encode (n :- m) = encode $ n :+ (-1) :* m
-  encode (Num i) = Num i
-  encode (n :+ m) = encode n :+ encode m
-  encode (n :* m) = n :* encode m
-
 infixl 6 :+, :-
 infixr 7 :*
 infixr 3 :/\
@@ -195,12 +168,12 @@ infixr 2 :\/
 infixr 1 :=>
 infix  4 :<=, :>=, :<, :>, :==
 
-(.*) :: Integer -> Bit -> Integer
+(.*) :: Num a => a -> Bit -> a
 a .* I = a
 _ .* O = 0
 {-# INLINE (.*) #-}
 
-(.*.) :: Vector Integer -> Vector Bit -> Integer
+(.*.) :: Num a => Vector a -> Vector Bit -> a
 as .*. bs = V.sum $ V.zipWith (.*) as bs
 
 type Bits = Vector Bit

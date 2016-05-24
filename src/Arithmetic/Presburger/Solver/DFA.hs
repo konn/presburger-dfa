@@ -6,12 +6,13 @@
 {-# OPTIONS_GHC -funbox-strict-fields #-}
 module Arithmetic.Presburger.Solver.DFA
        ( -- * Types
-         Expr(..), Formula(..), Ident (Ident), Valuation,
+         Expr(..), Formula(..), Ident (Ident), Solution, Validity(..),
          liftFormula,
          -- * Solvers
          solve, isTautology, satisfiable, entail, getAllSolutions,
          -- * Internal functions and data-types
-         buildDFA, decodeSolution, DFA(..), encode) where
+         buildDFA, buildDFAWith, getDFASolution,
+         decodeSolution, DFA(..), encode, Bit(..)) where
 import Arithmetic.Presburger.Solver.DFA.Automata
 import Arithmetic.Presburger.Solver.DFA.Types
 
@@ -26,35 +27,55 @@ import qualified Data.HashSet                     as HS
 import           Data.List                        (nub, sort, transpose)
 import qualified Data.Map.Strict                  as M
 import           Data.Maybe                       (fromMaybe, isJust)
+import qualified Data.Sequence                    as S
 import           Data.Vector                      (Vector)
 import qualified Data.Vector                      as V
 import           Unsafe.Coerce                    (unsafeCoerce)
 
-type Valuation = M.Map Ident Integer
+-- | Solution (or Model) is a map assigning @'Integer'@s to each variable.
+--   Variables without assingments are assumed to be @0@.
+--
+--   Since 0.1.0.0
+type Solution = M.Map Ident Integer
 
+-- | Validity of a given formula
+--   Since 0.1.0.0
+data Validity = Proved            -- ^ Given Formula is provable.
+              | Refuted !Solution -- ^ Given Formula has coutnerexample(s).
+              deriving (Show, Eq, Ord)
 
--- | @'entail' [f1, ..., fn] [g1, ..., gm]@ proves @f1 :/\ ... :/\ fn :==> g1 :\/ ... :\/ gm@.
-entail :: [Formula n] -> [Formula m] -> Bool
+-- | @'entail' [f1, ..., fn] [g1, ..., gm]@ tries to prove
+--   that @f1 :/\ ... :/\ fn@ implies @g1 :\/ ... :\/ gm@.
+--
+--   Since 0.1.0.0
+entail :: [Formula n] -> [Formula m] -> Validity
 entail prem goal = isTautology (foldr1 (:/\) prem :=> foldl1 (:\/) goal)
 
 -- | Test if given formula is tautology.
-isTautology :: Formula m -> Bool
-isTautology = null . flip asTypeOf [] . solve . Not
+--
+--   Since 0.1.0.0
+isTautology :: Formula m -> Validity
+isTautology = maybe Proved Refuted . solve . Not
 
 -- | @'solve phi'@ finds solutions for formula phi.
-solve :: Alternative f => Formula m -> f Valuation
+--   Note that @'solve'@ MAY NOT exhaust all possible solutions for the given formula.
+solve :: Alternative f => Formula m -> f Solution
 solve f =
   let (targ, vdic) = buildDFA $ encode f
-      len = M.size vdic
-  in asum $ map pure $ nub $ map (\sol -> fmap ((sol !!) . fromInteger) vdic) $ getSolution len targ
+  in asum $ map pure $ nub $ getDFASolution vdic targ
 {-# INLINE solve #-}
 
+-- | Check if the given formula is satisfiable
+--
+--   Since 0.1.0.0
 satisfiable :: Formula m -> Bool
 satisfiable = isJust . solve
 
 -- | Find solutions consecutively applying @'solve'@.
 --   N.B. This is SO slow.
-getAllSolutions :: Formula m -> [Valuation]
+--
+--   Since 0.1.0.0
+getAllSolutions :: Formula m -> [Solution]
 getAllSolutions = loop
   where
     loop f =
@@ -67,8 +88,33 @@ getAllSolutions = loop
 liftFormula :: Formula e -> Formula 'Extended
 liftFormula = unsafeCoerce
 
-toConstr :: Valuation -> [Formula 'Raw]
+toConstr :: Solution -> [Formula 'Raw]
 toConstr dic = [ Not ((Var a :: Expr 'Raw) :== Num b) | (a, b) <- M.toList dic ]
+
+class Encodable f where
+  encode :: f m -> f 'Raw
+
+instance Encodable Expr where
+  encode (Var v) = Var v
+  encode (n :- m) = encode $ n :+ (-1) :* m
+  encode (Num i) = Num i
+  encode (n :+ m) = encode n :+ encode m
+  encode (n :* m) = n :* encode m
+
+instance Encodable Formula where
+  encode (Not  p)   = Not (encode p)
+  encode (p :/\ q)  = encode p :/\ encode q
+  encode (p :\/ q)  = encode p :\/ encode q
+  encode (p :=> q)  = encode $ Not (encode p) :\/ encode q
+  encode (Ex   v p) = Ex v (encode p)
+  encode (Any  v p) = Not $ Ex v $ Not (encode p)
+  encode (n :<= m)  = encode n :<= encode m
+  encode (n :>= m)  = encode m :<= encode n
+  encode (n :== m)  = encode n :== encode m
+  encode (n :<  m)  =
+    let (m', n') = (encode m, encode n)
+    in encode $ n' :<= m' :/\ Not (n' :== m')
+  encode (n :>  m)  = encode $ m :< n
 
 -- | Minimizing operator
 leastSuch :: Ident -> Formula m -> Formula 'Extended
@@ -99,7 +145,7 @@ type VarDic = M.Map Ident Integer
 buildDFA :: Formula 'Raw -> (DFA Integer Bits, VarDic)
 buildDFA f =
   let (_, varDic) = execState (mapM getIdx $ sort (vars f)) (0, M.empty)
-  in (buildDFA' varDic f, varDic)
+  in (buildDFAWith varDic f, varDic)
 
 toAtomic :: M.Map Ident Integer -> Expr mode1 -> Expr mode -> Atomic
 toAtomic vdic a b =
@@ -112,28 +158,28 @@ toAtomic vdic a b =
       cfs = V.generate len $ \i -> fromMaybe 0 (lookup (toInteger i) cds)
   in Atomic cfs ub
 
-buildDFA' :: VarDic -> Formula 'Raw -> DFA Integer Bits
-buildDFA' vdic  (a :<= b) =
+buildDFAWith :: VarDic -> Formula 'Raw -> DFA Integer Bits
+buildDFAWith vdic  (a :<= b) =
   let atomic = toAtomic vdic a b
   in renumberStates $ leqToDFA atomic
-buildDFA' vdic  (a :== b) =
+buildDFAWith vdic  (a :== b) =
   let atomic = toAtomic vdic a b
   in renumberStates $ eqToDFA atomic
-buildDFA' vdic (Not t) = complement $ buildDFA' vdic t
-buildDFA' vdic (t1 :/\ t2) =
-  let d1 = buildDFA' vdic (encode t1)
-      d2 = buildDFA' vdic (encode t2)
+buildDFAWith vdic (Not t) = complement $ buildDFAWith vdic t
+buildDFAWith vdic (t1 :/\ t2) =
+  let d1 = buildDFAWith vdic (encode t1)
+      d2 = buildDFAWith vdic (encode t2)
   in renumberStates $ minimize $ d1 `intersection` d2
-buildDFA' vdic (t1 :\/ t2) =
-  let d1 = buildDFA' vdic (encode t1)
-      d2 = buildDFA' vdic (encode t2)
-  in renumberStates $ minimize $ d1 `join` d2
-buildDFA' vdic (Ex v t)
-  | v `notElem` vars t = buildDFA' vdic t
+buildDFAWith vdic (t1 :\/ t2) =
+  let d1 = buildDFAWith vdic (encode t1)
+      d2 = buildDFAWith vdic (encode t2)
+  in renumberStates $ minimize $ d1 `union` d2
+buildDFAWith vdic (Ex v t)
+  | v `notElem` vars t = buildDFAWith vdic t
   | otherwise =
     let idx = toInteger $ M.size vdic
         var = Anonymous $ 1 + maximum ((-1) : [i | Anonymous i <- M.keys vdic])
-        dfa = buildDFA' (M.insert var idx vdic) $ subst v var t
+        dfa = buildDFAWith (M.insert var idx vdic) $ subst v var t
     in changeLetter (uncurry (V.++)) $
        minimize $ renumberStates $ determinize $
        projDFA $ changeLetter (splitNth idx) dfa
@@ -186,41 +232,38 @@ leqToDFA = atomicToDFA (>= 0) (const $ const True)
 atomicToDFA :: (Integer -> Bool)               -- ^ Is final state?
             -> (Integer -> Vector Bit -> Bool) -- ^ Candidate reducer
             -> Atomic -> DFA Integer (Vector Bit)
-atomicToDFA chkFinal reduce Atomic{..} = minimize $ loop [upperBound] HS.empty
-                   DFA{ initial = upperBound
-                      , transition = M.empty
-                      , final = HS.empty
-                      }
+atomicToDFA chkFinal reduce Atomic{..} =
+  let trans = loop (S.singleton upperBound) HS.empty M.empty
+      dfa0  = DFA{ initial    = upperBound
+                 , final      = HS.empty
+                 , transition = trans
+                 }
+  in renumberStates $ minimize $ expandLetters inputs $ dfa0 { final = HS.filter chkFinal (states dfa0) }
   where
     inputs = V.replicateM (V.length coeffs) [O, I]
-    loop [] _ dfa = dfa
-    loop (q : qs) seen d@DFA{final = fs} =
-      let fs' | chkFinal q = HS.insert q fs
-              | otherwise  = fs
-          (dfa', seen', qs') =
-            foldr step (d { final = fs' }, seen, qs) $
-            filter (reduce q) inputs
-      in loop qs' seen'  dfa'
-      where
-        step i (DFA{..}, sn, ps) =
-          let j = (q - (coeffs .*. i))`div` 2
-              ps' | HS.member j sn = ps
-                  | otherwise = j : ps
-          in (DFA{ transition = M.insert (q, i) j transition
-                 , ..}, HS.insert j sn, ps')
+    loop (S.viewl -> k S.:< ws) qs trans =
+      let qs' = HS.insert k qs
+          targs  = map (\xi -> (xi, (k - (coeffs .*. xi)) `div` 2)) $
+                   filter (reduce k) inputs
+          trans' = M.fromList [ ((k, xi), j) | (xi, j) <- targs ]
+          ws'  = S.fromList $ filter (not . (`HS.member` qs')) (map snd targs)
+      in loop (ws S.>< ws') qs' (trans `M.union` trans')
+    loop _ _ tr = tr
 
 bitToInt :: Bit -> Integer
 bitToInt O = 0
 bitToInt I = 1
 {-# INLINE bitToInt #-}
 
-decodeSolution :: Int -> [Vector Bit] -> [Integer]
-decodeSolution len vs
-  | null vs = replicate len 0
-  | otherwise = map (foldr (\a b -> bitToInt a + 2*b) 0) $ transpose $ map V.toList vs
+decodeSolution :: VarDic -> [Vector Bit] -> Solution
+decodeSolution vdic vs
+  | null vs = fmap (const 0) vdic
+  | otherwise =
+    let vvec = V.fromList $ map (foldr (\a b -> bitToInt a + 2*b) 0) $ transpose $ map V.toList vs
+    in M.mapWithKey (const $ fromMaybe 0 . (vvec V.!?) . fromInteger) vdic
 
-getSolution :: (Ord a, Hashable a) => Int -> DFA a (Vector Bit) -> [[Integer]]
-getSolution l dfa =
+getDFASolution :: (Ord a, Hashable a, Alternative f) => VarDic -> DFA a (Vector Bit) -> f Solution
+getDFASolution vdic dfa =
   let ss = walk dfa
-  in map (decodeSolution l . toList . snd) $ M.toList $
+  in asum $ map (pure . decodeSolution vdic . toList . snd) $ M.toList $
      M.filterWithKey (\k _ -> isFinal dfa k) ss
