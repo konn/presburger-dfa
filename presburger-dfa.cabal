@@ -42,6 +42,7 @@ test-suite presburger-dfa-test
   hs-source-dirs:      test
   main-is:             Spec.hs
   other-modules:       Arithmetic.Presburger.Solver.DFA.AutomataSpec
+                       Arithmetic.Presburger.Solver.DFASpec
   build-depends:       base
                      , presburger-dfa
                      , hspec
