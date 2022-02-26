@@ -246,12 +246,12 @@ toBits ::
   Bits
 toBits sz dic =
   Bits
-    (IS.fromList [i | i <- [0 .. sz - 1], testBit dic i])
+    (IS.fromList [i | i <- [0 .. sz - 1], testBit dic (sz - 1 - i)])
     sz
 
 bitList :: Bits -> [Bit]
 bitList (Bits dic sz) =
-  [Bit $ IS.member k dic | k <- [0 .. sz -1]]
+  [Bit $ IS.member k dic | k <- [0 .. sz - 1]]
 
 instance Semigroup Bits where
   Bits ls lsz <> Bits rs rsz =
