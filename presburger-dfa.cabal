@@ -30,7 +30,6 @@ library
     , deepseq
     , dlist
     , hashable
-    , hybrid-vectors
     , transformers
     , uniplate
     , unordered-containers

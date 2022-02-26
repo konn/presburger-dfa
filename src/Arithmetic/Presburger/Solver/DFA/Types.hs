@@ -24,7 +24,6 @@ import Data.Bit (Bit (Bit))
 import Data.Data (Data)
 import Data.Typeable (Typeable)
 import qualified Data.Vector as V
-import qualified Data.Vector.Hybrid as HV
 import qualified Data.Vector.Unboxed as U
 import GHC.Generics (Generic)
 
@@ -218,11 +217,7 @@ a .* I = a
 _ .* O = 0
 {-# INLINE (.*) #-}
 
-(.*.) :: (Num a) => V.Vector a -> U.Vector Bit -> a
-as .*. bs = HV.foldl' (\acc (l, r) -> acc + l .* r) 0 $ HV.unsafeZip as bs
+(.*.) :: (Num a) => V.Vector a -> Bits -> a
+(.*.) as = V.sum . V.backpermute as . V.convert . U.elemIndices I
 
--- Why this cannot be just a IntSet?
--- This was because we need the un/shifting operation.
--- It requires some reallocation in the vector case.
--- Perhaps we can make use of Succ-less de Bruijn?
 type Bits = U.Vector Bit

@@ -274,9 +274,9 @@ atomicToDFA ::
   -- | Is final state?
   (Integer -> Bool) ->
   -- | Candidate reducer
-  (Integer -> U.Vector Bit -> Bool) ->
+  (Integer -> Bits -> Bool) ->
   Atomic ->
-  DFA Integer (U.Vector Bit)
+  DFA Integer (Bits)
 atomicToDFA chkFinal reduce Atomic {..} =
   let trans = loop (S.singleton upperBound) HS.empty M.empty
       dfa0 =
@@ -310,14 +310,14 @@ substitute dic (e1 :+ e2) = substitute dic e1 + substitute dic e2
 substitute dic (e1 :- e2) = substitute dic e1 - substitute dic e2
 substitute dic (e1 :* e2) = e1 * substitute dic e2
 
-decodeSolution :: VarDic -> [U.Vector Bit] -> Solution
+decodeSolution :: VarDic -> [Bits] -> Solution
 decodeSolution vdic vs
   | null vs = fmap (const 0) vdic
   | otherwise =
     let vvec = V.fromList $ map (foldr (\a b -> bitToInt a + 2 * b) 0) $ transpose $ map U.toList vs
      in M.mapWithKey (const $ fromMaybe 0 . (vvec V.!?) . fromInteger) vdic
 
-getDFASolution :: (Ord a, Hashable a, Alternative f) => VarDic -> DFA a (U.Vector Bit) -> f Solution
+getDFASolution :: (Ord a, Hashable a, Alternative f) => VarDic -> DFA a (Bits) -> f Solution
 getDFASolution vdic dfa =
   let ss = walk dfa
    in asum $
