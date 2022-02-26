@@ -21,12 +21,11 @@ module Arithmetic.Presburger.Solver.DFA.Types where
 
 import Control.DeepSeq (NFData (rnf))
 import Data.Bit (Bit (Bit))
-import Data.Bits (testBit)
 import Data.Data (Data)
-import Data.IntSet (IntSet)
-import qualified Data.IntSet as IS
 import Data.Typeable (Typeable)
 import qualified Data.Vector as V
+import qualified Data.Vector.Hybrid as HV
+import qualified Data.Vector.Unboxed as U
 import GHC.Generics (Generic)
 
 data Ident
@@ -219,44 +218,11 @@ a .* I = a
 _ .* O = 0
 {-# INLINE (.*) #-}
 
-(.*.) :: (Num a) => V.Vector a -> Bits -> a
-as .*. bs = V.sum $ V.backpermute as $ V.fromList $ IS.toList $ ons bs
+(.*.) :: (Num a) => V.Vector a -> U.Vector Bit -> a
+as .*. bs = HV.foldl' (\acc (l, r) -> acc + l .* r) 0 $ HV.unsafeZip as bs
 
-data Bits = Bits
-  { ons :: !IntSet
-  , size :: !Int
-  }
-  deriving (Show, Eq, Ord, Generic)
-
-splitNth :: Int -> Bits -> ((Bits, Bits), Bit)
-splitNth n bs =
-  let (hd, mem, tl) = IS.splitMember n $ ons bs
-   in (
-        ( Bits hd n
-        , Bits (IS.mapMonotonic (subtract (n + 1)) tl) (size bs - n - 1)
-        )
-      , Bit mem
-      )
-
-toBits ::
-  -- | Number of bits
-  Int ->
-  -- | a integer to use as bitset
-  Word ->
-  Bits
-toBits sz dic =
-  Bits
-    (IS.fromList [i | i <- [0 .. sz - 1], testBit dic (sz - 1 - i)])
-    sz
-
-bitList :: Bits -> [Bit]
-bitList (Bits dic sz) =
-  [Bit $ IS.member k dic | k <- [0 .. sz - 1]]
-
-instance Semigroup Bits where
-  Bits ls lsz <> Bits rs rsz =
-    Bits (ls <> IS.mapMonotonic (+ lsz) rs) (lsz + rsz)
-
-snocBit :: Bits -> Bit -> Bits
-snocBit bs O = bs {size = size bs + 1}
-snocBit bs I = bs {size = size bs + 1, ons = IS.insert (size bs) $ ons bs}
+-- Why this cannot be just a IntSet?
+-- This was because we need the un/shifting operation.
+-- It requires some reallocation in the vector case.
+-- Perhaps we can make use of Succ-less de Bruijn?
+type Bits = U.Vector Bit

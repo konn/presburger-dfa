@@ -27,6 +27,7 @@ import Control.Monad.Trans.State.Strict (StateT, evalState, evalStateT, get, get
 import Data.Functor.Identity (Identity)
 import Data.Hashable (Hashable)
 import qualified Data.Map.Strict as M
+import qualified Data.Vector.Unboxed as U
 
 type Letter = Bits
 
@@ -70,7 +71,7 @@ padCharLast DFA {transition = tr, ..} =
   let transition =
         M.fromList $
           concat
-            [ [((q, l `snocBit` O), p), ((q, l `snocBit` I), p)]
+            [ [((q, l `U.snoc` O), p), ((q, l `U.snoc` I), p)]
             | ((q, l), p) <- M.toList tr
             ]
    in DFA {..}
