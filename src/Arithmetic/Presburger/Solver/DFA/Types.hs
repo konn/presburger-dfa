@@ -233,7 +233,7 @@ splitNth n bs =
   let (hd, mem, tl) = IS.splitMember n $ ons bs
    in (
         ( Bits hd n
-        , Bits (IS.mapMonotonic (subtract n) tl) (size bs - n)
+        , Bits (IS.mapMonotonic (subtract (n + 1)) tl) (size bs - n - 1)
         )
       , Bit mem
       )
