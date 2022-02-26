@@ -30,7 +30,7 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.ghcVer }}-
 
-    - name: Local dist-newstyle
+    - name: Cache local dist-newstyle
       uses: actions/cache@v1
       env:
         cache-name: cache-dist

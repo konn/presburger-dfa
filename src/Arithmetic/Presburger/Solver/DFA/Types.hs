@@ -2,11 +2,17 @@
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE NoOverloadedLists #-}
 {-# OPTIONS_GHC -funbox-strict-fields #-}
@@ -14,11 +20,11 @@
 module Arithmetic.Presburger.Solver.DFA.Types where
 
 import Control.DeepSeq (NFData (rnf))
+import Data.Bit (Bit (Bit))
 import Data.Data (Data)
-import Data.List (delete, nub)
 import Data.Typeable (Typeable)
-import Data.Vector (Vector)
 import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as U
 import GHC.Generics (Generic)
 
 data Ident
@@ -27,25 +33,41 @@ data Ident
   deriving (Generic, Data, Typeable, Eq, Ord)
   deriving anyclass (NFData)
 
-data Expr mode where
-  Var :: !Ident -> Expr a
-  Num :: !Integer -> Expr a
-  (:+) :: !(Expr m) -> !(Expr n) -> Expr (Switch m n)
-  (:-) :: !(Expr m) -> !(Expr n) -> Expr 'Extended
-  (:*) :: !Integer -> !(Expr m) -> Expr m
+type Expr mode = Expr' mode Ident
 
-data Formula mode where
-  (:<=) :: !(Expr a) -> !(Expr b) -> Formula (Switch a b)
-  (:==) :: !(Expr a) -> !(Expr b) -> Formula (Switch a b)
-  (:<) :: !(Expr a) -> !(Expr b) -> Formula 'Extended
-  (:>=) :: !(Expr a) -> !(Expr b) -> Formula 'Extended
-  (:>) :: !(Expr a) -> !(Expr b) -> Formula 'Extended
-  Not :: !(Formula m) -> Formula m
-  (:\/) :: !(Formula m) -> !(Formula n) -> Formula (Switch m n)
-  (:/\) :: !(Formula m) -> !(Formula n) -> Formula (Switch m n)
-  (:=>) :: !(Formula m) -> !(Formula n) -> Formula 'Extended
-  Ex :: !Ident -> !(Formula m) -> Formula m
-  Any :: !Ident -> !(Formula m) -> Formula 'Extended
+data Expr' mode var where
+  Var :: !v -> Expr' mode v
+  Num :: !Integer -> Expr' mode v
+  (:+) :: !(Expr' m v) -> !(Expr' n v) -> Expr' (Switch m n) v
+  (:-) :: !(Expr' m v) -> !(Expr' n v) -> Expr' 'Extended v
+  (:*) :: !Integer -> !(Expr' m v) -> Expr' m v
+
+deriving instance Functor (Expr' mode)
+
+deriving instance Foldable (Expr' mode)
+
+deriving instance Traversable (Expr' mode)
+
+type Formula mode = Formula' mode Ident
+
+data Formula' mode var where
+  (:<=) :: !(Expr a) -> !(Expr b) -> Formula' (Switch a b) var
+  (:==) :: !(Expr a) -> !(Expr b) -> Formula' (Switch a b) var
+  (:<) :: !(Expr a) -> !(Expr b) -> Formula' 'Extended var
+  (:>=) :: !(Expr a) -> !(Expr b) -> Formula' 'Extended var
+  (:>) :: !(Expr a) -> !(Expr b) -> Formula' 'Extended var
+  Not :: !(Formula' m var) -> Formula' m var
+  (:\/) :: !(Formula' m var) -> !(Formula' n var) -> Formula' (Switch m n) var
+  (:/\) :: !(Formula' m var) -> !(Formula' n var) -> Formula' (Switch m n) var
+  (:=>) :: !(Formula' m var) -> !(Formula' n var) -> Formula' 'Extended var
+  Ex :: !Ident -> !(Formula' m var) -> Formula' m var
+  Any :: !Ident -> !(Formula' m var) -> Formula' 'Extended var
+
+deriving instance Functor (Formula' m)
+
+deriving instance Foldable (Formula' m)
+
+deriving instance Traversable (Formula' m)
 
 instance NFData (Expr a) where
   rnf (Var t) = rnf t
@@ -54,7 +76,7 @@ instance NFData (Expr a) where
   rnf (t1 :- t2) = rnf t1 `seq` rnf t2
   rnf (t1 :* t2) = rnf t1 `seq` rnf t2
 
-instance NFData (Formula a) where
+instance NFData v => NFData (Formula' a v) where
   rnf (t1 :<= t2) = rnf t1 `seq` rnf t2
   rnf (t1 :== t2) = rnf t1 `seq` rnf t2
   rnf (t1 :< t2) = rnf t1 `seq` rnf t2
@@ -71,8 +93,13 @@ instance Show Ident where
   show (Ident x) = x
   show (Anonymous i) = "_[" ++ show i ++ "]"
 
-data Bit = O | I
-  deriving (Read, Show, Eq, Ord)
+pattern O :: Bit
+pattern O = Bit False
+
+pattern I :: Bit
+pattern I = Bit True
+
+{-# COMPLETE I, O #-}
 
 data Mode = Raw | Extended
   deriving (Read, Show, Eq, Ord)
@@ -83,10 +110,10 @@ type family Switch m n where
   Switch m 'Extended = 'Extended
   Switch a a = a
 
-class Subst f where
-  subst :: Ident -> Ident -> f a -> f a
+class Subst f v | f -> v where
+  subst :: v -> v -> f m v -> f m v
 
-instance Subst Expr where
+instance Subst Expr' Ident where
   subst old new (Var e)
     | e == old = Var new
     | otherwise = Var e
@@ -95,7 +122,7 @@ instance Subst Expr where
   subst old new (e1 :- e2) = subst old new e1 :- subst old new e2
   subst old new (e1 :* e2) = e1 :* subst old new e2
 
-instance Subst Formula where
+instance Subst Expr' Ident => Subst Formula' Ident where
   subst old new (e1 :<= e2) = subst old new e1 :<= subst old new e2
   subst old new (e1 :== e2) = subst old new e1 :== subst old new e2
   subst old new (e1 :< e2) = subst old new e1 :< subst old new e2
@@ -111,29 +138,6 @@ instance Subst Formula where
   subst old new (Any v e)
     | old == v = Any v e
     | otherwise = Any v (subst old new e)
-
-class Vars f where
-  vars :: f a -> [Ident]
-
-instance Vars Expr where
-  vars (Var v) = [v]
-  vars (a :+ b) = nub $ vars a ++ vars b
-  vars (a :- b) = nub $ vars a ++ vars b
-  vars (_ :* b) = vars b
-  vars (Num _) = []
-
-instance Vars Formula where
-  vars (m1 :<= m2) = nub $ vars m1 ++ vars m2
-  vars (m1 :== m2) = nub $ vars m1 ++ vars m2
-  vars (m1 :< m2) = nub $ vars m1 ++ vars m2
-  vars (m1 :>= m2) = nub $ vars m1 ++ vars m2
-  vars (m1 :> m2) = nub $ vars m1 ++ vars m2
-  vars (Not m) = vars m
-  vars (m1 :\/ m2) = nub $ vars m1 ++ vars m2
-  vars (m1 :/\ m2) = nub $ vars m1 ++ vars m2
-  vars (m1 :=> m2) = nub $ vars m1 ++ vars m2
-  vars (Ex v m) = delete v $ vars m
-  vars (Any v m) = delete v $ vars m
 
 instance Show (Expr m) where
   showsPrec _ (Var i) = shows i
@@ -213,7 +217,7 @@ a .* I = a
 _ .* O = 0
 {-# INLINE (.*) #-}
 
-(.*.) :: Num a => Vector a -> Vector Bit -> a
-as .*. bs = V.sum $ V.zipWith (.*) as bs
+(.*.) :: (Num a) => V.Vector a -> Bits -> a
+(.*.) as = V.sum . V.backpermute as . V.convert . U.elemIndices I
 
-type Bits = Vector Bit
+type Bits = U.Vector Bit
