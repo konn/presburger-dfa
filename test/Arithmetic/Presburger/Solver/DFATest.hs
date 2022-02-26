@@ -39,8 +39,8 @@ prop_solve_atomLeq c d ub =
    in (null anss .&&. forAll arbitrary (\e f -> natToInt c * natToInt e + d * natToInt f > ub))
         .||. (not (null anss) .&&. conjoin [substitute sol target <= ub | sol <- anss])
 
-solves :: Expr 'Extended -> Expr 'Extended -> TestTree
-solves lhs rhs = testCase ("solves " <> show (lhs :== rhs :: Formula 'Extended)) $ do
+solvesEq :: Expr 'Extended -> Expr 'Extended -> TestTree
+solvesEq lhs rhs = testCase ("solves " <> show (lhs :== rhs :: Formula 'Extended)) $ do
   let sols = solve (lhs :== rhs) :: [Solution]
   not (null sols) @? "Solution not found!"
   forM_ sols $ \sol ->
@@ -73,6 +73,20 @@ solvesLeqs lrhs = testCase ("solves " <> show ineq) $ do
     ineq :: Formula _
     ineq = foldr1 (:/\) $ map (uncurry (:<=)) lrhs
 
+solvesEqs :: [(Expr 'Extended, Expr 'Extended)] -> TestTree
+solvesEqs lrhs = testCase ("solves " <> show ineq) $ do
+  let sols = solve ineq :: [Solution]
+  not (null sols) @? "Solution not found!"
+  forM_ sols $ \sol ->
+    forM_ lrhs $ \(lhs, rhs) -> do
+      let subs = substitute sol
+      let lhs' = subs lhs
+          rhs' = subs rhs
+      lhs' @?= rhs'
+  where
+    ineq :: Formula _
+    ineq = foldr1 (:/\) $ map (uncurry (:==)) lrhs
+
 refutes :: Formula s -> TestTree
 refutes fml = testCase ("refutes " <> show fml) $ do
   let sols = solve fml :: [Solution]
@@ -82,13 +96,26 @@ test_regressions :: TestTree
 test_regressions =
   testGroup
     "Regression tests"
-    [ solves (2 * Var n - Var m) 1
+    [ solvesEq (2 * Var n - Var m) 1
+    , solvesEq (2 :* Var n :- 3 :* Var m) 5
     , solvesLeq (2 :* Var n :- 3 :* Var m) 5
+    , refutes $
+        (2 :* Var n :- 3 :* Var m :== 5)
+          :/\ (3 :* Var n :+ (2 :* Var m :: Expr 'Extended) :== 13)
+    , solvesEqs
+        [ (2 :* Var n :- 3 :* Var m :+ Var l, 5)
+        , (3 :* Var n :+ (2 :* Var m :: Expr 'Extended), 13)
+        ]
+    , solvesEqs
+        [ (2 :* Var n :- 3 :* Var m :+ (Var l :: Expr 'Extended), 5)
+        , (3 :* Var n :+ (2 :* Var m :: Expr 'Extended), 13)
+        , (Var n :+ (Var m :+ (Var l :: Expr 'Extended) :: Expr 'Extended), 24)
+        ]
     , solvesLeqs
         [ (2 :* Var n :- 3 :* Var n, 5)
         , (3 :* Var n :+ (2 :* Var m :: Expr 'Extended), 14)
         ]
-    , testCase "Solves multiply of 7 in [10, 20)" $ do
+    , testCase "finds multiply of 7 in [10, 20)" $ do
         let fml = Var n :== 7 :* Var l :/\ 10 :<= Var n :/\ Var n :< 20
             sols = solve fml :: [Solution]
         not (null sols) @? "No solution found!"
@@ -130,6 +157,13 @@ test_regressions =
         2 :* Var n :- 3 :* Var m :+ Var l :== 5
           :/\ 3 :* Var n :+ 2 :* Var m :== 13
           :/\ Var n :+ Var m :+ Var l :> 25
+    , refutes $
+        2 :* Var n :- 3 :* Var m :+ Var l :== 5
+          :/\ 3 :* Var n :+ 2 :* Var m :== 13
+          :/\ Var n :+ Var m :+ Var l :== 25
+    , refutes $
+        2 :* Var n :- 3 :* Var m :== 5
+          :/\ 3 :* Var n :+ 2 :* Var m :== 13
     ]
 
 prop_solve_atomEq :: Natural -> Integer -> Integer -> Property
