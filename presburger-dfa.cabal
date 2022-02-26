@@ -76,10 +76,9 @@ benchmark solve-bench
       base
     , deepseq
     , hashable
+    , presburger
     , presburger-dfa
     , tasty-bench
-
--- , presburger
 
 source-repository head
   type:     git
