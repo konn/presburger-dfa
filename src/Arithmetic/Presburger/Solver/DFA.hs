@@ -283,7 +283,7 @@ atomicToDFA chkFinal reduce Atomic {..} =
   where
     iniLen = V.length coeffs
     inputs
-      | iniLen > 1 = map (toBits iniLen) [0 .. 2 ^ (iniLen - 1)]
+      | iniLen > 1 = map (toBits iniLen) [0 .. 2 ^ iniLen - 1]
       | otherwise = []
     loop (S.viewl -> k S.:< ws) qs trans =
       let qs' = HS.insert k qs
