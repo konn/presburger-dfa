@@ -1,6 +1,7 @@
 resolver: lts-18.26
 packages:
 - '.'
+- 'presburger'
 
 allow-newer: true
 

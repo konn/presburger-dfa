@@ -1,0 +1,39 @@
+cabal-version: 1.12
+
+-- This file has been generated from package.yaml by hpack version 0.34.4.
+--
+-- see: https://github.com/sol/hpack
+
+name:           presburger
+version:        0.6.2.0
+synopsis:       Presburger Arithmetic Solver for GHC Type-level natural numbers.
+category:       Math, Type System
+homepage:       https://github.com/konn/ghc-typelits-presburger#readme
+bug-reports:    https://github.com/konn/ghc-typelits-presburger/issues
+author:         Hiromi ISHII
+maintainer:     konn.jinro _at_ gmail.com
+license:        BSD3
+license-file:   LICENSE
+build-type:     Simple
+tested-with:
+    GHC==8.6.5 GHC==8.8.4 GHC==8.10.7 GHC==9.0.1 GHC==9.2.1
+
+source-repository head
+  type: git
+  location: https://github.com/konn/ghc-typelits-presburger
+
+library
+  exposed-modules:
+      Data.Integer.SAT
+  other-modules:
+      Paths_presburger
+  hs-source-dirs:
+      src
+  ghc-options: -Wall -Wno-dodgy-imports
+  build-depends:
+      base >=4.7 && <5
+    , containers
+    , mtl
+    , pretty
+    , syb
+  default-language: Haskell2010

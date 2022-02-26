@@ -748,7 +748,7 @@ toList a = go a []
 instance Monad Answer where
   return a = One a
 
-#if !MIN_VERSION_ghc(8,8,1)
+#if defined(__GLASGOW_HASKELL__) && __GLASGOW_HASKELL__ < 808
   fail _             = None
 #endif
   None >>= _ = None
