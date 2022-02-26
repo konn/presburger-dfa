@@ -1,10 +1,11 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE ViewPatterns #-}
 
 module Arithmetic.Presburger.Solver.DFA.Monadic
   ( Expr' (..),
+    Expr,
     Formula' (..),
+    Formula,
     Validity (..),
     SolverT,
     Solver,

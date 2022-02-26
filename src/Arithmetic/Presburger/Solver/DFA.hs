@@ -13,7 +13,9 @@
 module Arithmetic.Presburger.Solver.DFA
   ( -- * Types
     Expr' (..),
+    Expr,
     Formula' (..),
+    Formula,
     Ident (..),
     Solution,
     Validity (..),
