@@ -1,59 +1,80 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving, RecordWildCards, ViewPatterns #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ViewPatterns #-}
+
 module Arithmetic.Presburger.Solver.DFA.Monadic
-       (Expr(..), Formula(..), Validity(..),
-        SolverT, Solver, runSolverT, runSolver,
-        assume, prove, currentSolution, findSolutionsFor) where
+  ( Expr' (..),
+    Formula' (..),
+    Validity (..),
+    SolverT,
+    Solver,
+    runSolverT,
+    runSolver,
+    assume,
+    prove,
+    currentSolution,
+    findSolutionsFor,
+  )
+where
+
 import Arithmetic.Presburger.Solver.DFA
 import Arithmetic.Presburger.Solver.DFA.Automata
 import Arithmetic.Presburger.Solver.DFA.Types
-
-import           Control.Applicative              (Alternative)
-import           Control.Monad                    ((<=<))
-import           Control.Monad.Trans.State.Strict (StateT, evalState)
-import           Control.Monad.Trans.State.Strict (evalStateT, get, gets)
-import           Control.Monad.Trans.State.Strict (modify, put)
-import           Data.Functor.Identity            (Identity)
-import           Data.Hashable                    (Hashable)
-import qualified Data.Map.Strict                  as M
-import           Data.Vector                      (Vector)
-import qualified Data.Vector                      as V
+import Control.Applicative (Alternative)
+import Control.Monad ((<=<))
+import Control.Monad.Trans.State.Strict (StateT, evalState, evalStateT, get, gets, modify, put)
+import Data.Functor.Identity (Identity)
+import Data.Hashable (Hashable)
+import qualified Data.Map.Strict as M
+import Data.Vector (Vector)
+import qualified Data.Vector as V
 
 type Letter = Vector Bit
-newtype SolverT m a = SolverT { runSolverT_ :: StateT SolverState m a }
-                      deriving (Monad, Applicative, Functor)
 
-data SolverState = SolverState { dfa      :: Maybe (DFA Integer Letter)
-                               , varsDic  :: M.Map Ident Integer
-                               , varCount :: Integer
-                               }
+newtype SolverT m a = SolverT {runSolverT_ :: StateT SolverState m a}
+  deriving (Monad, Applicative, Functor)
+
+data SolverState = SolverState
+  { dfa :: Maybe (DFA Integer Letter)
+  , varsDic :: M.Map Ident Integer
+  , varCount :: Integer
+  }
+
 type Solver = SolverT Identity
 
 initialState :: SolverState
-initialState = SolverState { dfa      = Nothing
-                           , varsDic  = M.fromList []
-                           , varCount = 0
-                           }
+initialState =
+  SolverState
+    { dfa = Nothing
+    , varsDic = M.fromList []
+    , varCount = 0
+    }
 
 currentDFA :: Monad m => SolverT m (Maybe (DFA Integer Letter))
 currentDFA = SolverT $ gets dfa
 
 updateVar :: Monad m => Ident -> SolverT m ()
 updateVar ident = SolverT $ do
-  s@SolverState{..} <- get
+  s@SolverState {..} <- get
   case M.lookup ident varsDic of
-    Just _  -> return ()
+    Just _ -> return ()
     Nothing ->
-      put $ s { varCount = varCount + 1
-              , varsDic  = M.insert ident varCount varsDic
-              , dfa = padCharLast <$> dfa
-              }
+      put $
+        s
+          { varCount = varCount + 1
+          , varsDic = M.insert ident varCount varsDic
+          , dfa = padCharLast <$> dfa
+          }
 
 padCharLast :: Ord s => DFA s (Vector Bit) -> DFA s (Vector Bit)
-padCharLast DFA{transition = tr, ..} =
-  let transition = M.fromList $ concat [ [((q, l `V.snoc` O), p), ((q, l `V.snoc` I), p)]
-                                       | ((q, l), p) <- M.toList tr
-                                       ]
-  in DFA{..}
+padCharLast DFA {transition = tr, ..} =
+  let transition =
+        M.fromList $
+          concat
+            [ [((q, l `V.snoc` O), p), ((q, l `V.snoc` I), p)]
+            | ((q, l), p) <- M.toList tr
+            ]
+   in DFA {..}
 {-# INLINE padCharLast #-}
 
 runSolverT :: Monad m => SolverT m a -> m a
@@ -67,14 +88,14 @@ runSolver s = evalState (runSolverT_ s) initialState
 toDFA :: Monad m => Formula k -> SolverT m (DFA Integer Bits)
 toDFA f = do
   let f' = encode f
-  mapM_ updateVar (vars f')
+  mapM_ updateVar (freeVars f')
   SolverT $ flip buildDFAWith f' <$> gets varsDic
 {-# INLINE toDFA #-}
 
 assume :: Monad m => Formula k -> SolverT m ()
 assume f = do
   d <- viewWithFormula f
-  SolverT $ modify $ \s -> s { dfa = Just d }
+  SolverT $ modify $ \s -> s {dfa = Just d}
 {-# INLINE assume #-}
 
 prove :: Monad m => Formula k -> SolverT m Validity

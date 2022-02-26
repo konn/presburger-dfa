@@ -12,15 +12,15 @@
 
 module Arithmetic.Presburger.Solver.DFA
   ( -- * Types
-    Expr (..),
-    Formula (..),
+    Expr' (..),
+    Formula' (..),
     Ident (..),
     Solution,
     Validity (..),
     liftFormula,
     substitute,
     Mode (..),
-    vars,
+    freeVars,
 
     -- * Solvers
     solve,
@@ -46,14 +46,18 @@ import Arithmetic.Presburger.Solver.DFA.Types
 import Control.Applicative (Alternative)
 import Control.Arrow (first)
 import Control.Monad.Trans.State.Strict (State, execState, get, gets, put)
+import Data.DList (DList)
+import qualified Data.DList as DL
 import Data.Either (partitionEithers)
-import Data.Foldable (asum, toList)
+import Data.Foldable (asum, foldl', toList)
 import qualified Data.HashSet as HS
 import Data.Hashable (Hashable)
-import Data.List (nub, sort, transpose)
+import Data.List (transpose)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
 import qualified Data.Sequence as S
+import Data.Set (Set)
+import qualified Data.Set as Set
 import Data.Vector (Vector)
 import qualified Data.Vector as V
 import Unsafe.Coerce (unsafeCoerce)
@@ -116,16 +120,16 @@ liftFormula :: Formula e -> Formula 'Extended
 liftFormula = unsafeCoerce
 
 class Encodable f where
-  encode :: f m -> f 'Raw
+  encode :: f m Ident -> f 'Raw Ident
 
-instance Encodable Expr where
+instance Encodable Expr' where
   encode (Var v) = Var v
   encode (n :- m) = encode $ n :+ (-1) :* m
   encode (Num i) = Num i
   encode (n :+ m) = encode n :+ encode m
   encode (n :* m) = n :* encode m
 
-instance Encodable Formula where
+instance Encodable Formula' where
   encode (Not p) = Not (encode p)
   encode (p :/\ q) = encode p :/\ encode q
   encode (p :\/ q) = encode p :\/ encode q
@@ -147,21 +151,24 @@ leastSuch v f =
    in f :/\ Any x (Var x :< Var v :=> Not (subst v x f))
 
 minimized :: Formula m -> Formula 'Extended
-minimized f = foldr ((.) . leastSuch) id (vars f) (liftFormula f)
+minimized f = foldr ((.) . leastSuch) id (freeVars f) (liftFormula f)
 
 type Summand = Either Integer (Ident, Integer)
 
 summands :: Expr mode -> [Summand]
-summands (n :* m :* t) = summands ((n * m) :* t)
-summands (n :- m) = summands (n :+ (-1) :* m)
-summands (0 :* _) = []
-summands (n :* Var i) = [Right (i, n)]
-summands (n :* Num m) = [Left (n * m)]
-summands (n :* (l :+ m)) = summands (n :* l) ++ summands (n :* m)
-summands (n :* (l :- m)) = summands (n :* l) ++ summands ((- n) :* m)
-summands (Var t) = [Right (t, 1)]
-summands (Num t) = [Left t]
-summands (t1 :+ t2) = summands t1 ++ summands t2
+summands = DL.toList . loop
+  where
+    loop :: Expr mode -> DList Summand
+    loop (n :* m :* t) = loop ((n * m) :* t)
+    loop (n :- m) = loop (n :+ (-1) :* m)
+    loop (0 :* _) = mempty
+    loop (n :* Var i) = pure $ Right (i, n)
+    loop (n :* Num m) = pure $ Left (n * m)
+    loop (n :* (l :+ m)) = loop (n :* l) <> loop (n :* m)
+    loop (n :* (l :- m)) = loop (n :* l) <> loop ((- n) :* m)
+    loop (Var t) = pure $ Right (t, 1)
+    loop (Num t) = pure $ Left t
+    loop (t1 :+ t2) = loop t1 <> loop t2
 
 type Index = Integer
 
@@ -169,7 +176,7 @@ type VarDic = M.Map Ident Integer
 
 buildDFA :: Formula 'Raw -> (DFA Integer Bits, VarDic)
 buildDFA f =
-  let (_, varDic) = execState (mapM getIdx $ sort (vars f)) (0, M.empty)
+  let (_, varDic) = execState (mapM_ getIdx $ freeVars f) (0, M.empty)
    in (buildDFAWith varDic f, varDic)
 
 toAtomic :: M.Map Ident Integer -> Expr mode1 -> Expr mode -> Atomic
@@ -200,7 +207,7 @@ buildDFAWith vdic (t1 :\/ t2) =
       d2 = buildDFAWith vdic (encode t2)
    in renumberStates $ minimize $ d1 `union` d2
 buildDFAWith vdic (Ex v t)
-  | v `notElem` vars t = buildDFAWith vdic t
+  | v `notElem` freeVars t = buildDFAWith vdic t
   | otherwise =
     let idx = toInteger $ M.size vdic
         var = Anonymous $ 1 + maximum ((-1) : [i | Anonymous i <- M.keys vdic])
@@ -212,20 +219,23 @@ buildDFAWith vdic (Ex v t)
                 projDFA $ changeLetter (splitNth idx) dfa
 
 fresh :: Formula a -> Ident
-fresh e = Anonymous $ 1 + maximum ((-1) : [i | Anonymous i <- allVarsF e])
+fresh e = Anonymous $ 1 + maximum ((-1) : [i | Anonymous i <- Set.toList $ allVars e])
 
-allVarsF :: Formula a -> [Ident]
-allVarsF (e1 :<= e2) = nub $ vars e1 ++ vars e2
-allVarsF (e1 :== e2) = nub $ vars e1 ++ vars e2
-allVarsF (e1 :< e2) = nub $ vars e1 ++ vars e2
-allVarsF (e1 :>= e2) = nub $ vars e1 ++ vars e2
-allVarsF (e1 :> e2) = nub $ vars e1 ++ vars e2
-allVarsF (Not e) = allVarsF e
-allVarsF (e1 :\/ e2) = nub $ allVarsF e1 ++ allVarsF e2
-allVarsF (e1 :/\ e2) = nub $ allVarsF e1 ++ allVarsF e2
-allVarsF (e1 :=> e2) = nub $ allVarsF e1 ++ allVarsF e2
-allVarsF (Ex e1 e2) = nub $ e1 : allVarsF e2
-allVarsF (Any e1 e2) = nub $ e1 : allVarsF e2
+allVars :: Foldable f => f Ident -> Set Ident
+allVars = foldl' (flip Set.insert) Set.empty
+
+freeVars :: Formula a -> Set Ident
+freeVars (ex :<= ex') = allVars ex <> allVars ex'
+freeVars (ex :== ex') = allVars ex <> allVars ex'
+freeVars (ex :< ex') = allVars ex <> allVars ex'
+freeVars (ex :>= ex') = allVars ex <> allVars ex'
+freeVars (ex :> ex') = allVars ex <> allVars ex'
+freeVars (Not for') = freeVars for'
+freeVars (for' :\/ for2) = freeVars for' <> freeVars for2
+freeVars (for' :/\ for2) = freeVars for' <> freeVars for2
+freeVars (for' :=> for2) = freeVars for' <> freeVars for2
+freeVars (Ex bound for') = Set.delete bound $ freeVars for'
+freeVars (Any bound for') = Set.delete bound $ freeVars for'
 
 splitNth :: Integer -> Vector a -> ((Vector a, Vector a), a)
 splitNth n v =
