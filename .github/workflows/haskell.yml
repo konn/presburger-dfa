@@ -74,6 +74,7 @@ jobs:
       uses: actions/download-artifact@v2
       with:
         name: test-bins
+        path: ./test-bins
     - name: Run tests
       run: |
         chmod +x ./test-bins/presburger-dfa-test
@@ -89,6 +90,7 @@ jobs:
       uses: actions/download-artifact@v2
       with:
         name: bench-bins
+        path: ./bench-bins
     - name: Run tests
       run: |
         chmod +x ./bench-bins/solve-bench
