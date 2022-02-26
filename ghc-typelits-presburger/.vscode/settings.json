@@ -1,0 +1,16 @@
+{
+  "spellright.ignoreFiles": [
+    "**/.gitignore",
+    "**/.spellignore",
+    "**/*.dump*"
+  ],
+  "files.exclude": {
+    "**/.stack-work": true
+  },
+  "github-actions.workflows.pinned.workflows": [
+    ".github/workflows/haskell.yml"
+  ],
+  "github-actions.workflows.pinned.refresh.enabled": true,
+  "editor.defaultFormatter": "haskell.haskell",
+  "haskell.formattingProvider": "fourmolu",
+}
