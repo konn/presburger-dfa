@@ -62,7 +62,6 @@ import qualified Data.Sequence as S
 import Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Vector as V
-import qualified Data.Vector.Unboxed as U
 import Unsafe.Coerce (unsafeCoerce)
 
 {- |
@@ -212,10 +211,10 @@ buildDFAWith vdic (t1 :\/ t2) =
 buildDFAWith vdic (Ex v t)
   | v `notElem` freeVars t = buildDFAWith vdic t
   | otherwise =
-    let idx = toInteger $ M.size vdic
+    let idx = M.size vdic
         var = Anonymous $ 1 + maximum ((-1) : [i | Anonymous i <- M.keys vdic])
-        dfa = buildDFAWith (M.insert var idx vdic) $ subst v var t
-     in changeLetter (uncurry (U.++)) $
+        dfa = buildDFAWith (M.insert var (fromIntegral idx) vdic) $ subst v var t
+     in changeLetter (uncurry (<>)) $
           minimize $
             renumberStates $
               determinize $
@@ -239,11 +238,6 @@ freeVars (for' :/\ for2) = freeVars for' <> freeVars for2
 freeVars (for' :=> for2) = freeVars for' <> freeVars for2
 freeVars (Ex bound for') = Set.delete bound $ freeVars for'
 freeVars (Any bound for') = Set.delete bound $ freeVars for'
-
-splitNth :: U.Unbox a => Integer -> U.Vector a -> ((U.Vector a, U.Vector a), a)
-splitNth n v =
-  let (hd, tl) = U.splitAt (fromInteger n) v
-   in ((hd, U.tail tl), U.head tl)
 
 type BuildingEnv = (Index, M.Map Ident Index)
 
@@ -274,9 +268,9 @@ atomicToDFA ::
   -- | Is final state?
   (Integer -> Bool) ->
   -- | Candidate reducer
-  (Integer -> U.Vector Bit -> Bool) ->
+  (Integer -> Bits -> Bool) ->
   Atomic ->
-  DFA Integer (U.Vector Bit)
+  DFA Integer Bits
 atomicToDFA chkFinal reduce Atomic {..} =
   let trans = loop (S.singleton upperBound) HS.empty M.empty
       dfa0 =
@@ -287,7 +281,10 @@ atomicToDFA chkFinal reduce Atomic {..} =
           }
    in renumberStates $ minimize $ expandLetters inputs $ dfa0 {final = HS.filter chkFinal (states dfa0)}
   where
-    inputs = U.replicateM (V.length coeffs) [O, I]
+    iniLen = V.length coeffs
+    inputs
+      | iniLen > 1 = map (toBits iniLen) [0 .. 2 ^ (iniLen - 1)]
+      | otherwise = []
     loop (S.viewl -> k S.:< ws) qs trans =
       let qs' = HS.insert k qs
           targs =
@@ -310,14 +307,19 @@ substitute dic (e1 :+ e2) = substitute dic e1 + substitute dic e2
 substitute dic (e1 :- e2) = substitute dic e1 - substitute dic e2
 substitute dic (e1 :* e2) = e1 * substitute dic e2
 
-decodeSolution :: VarDic -> [U.Vector Bit] -> Solution
+decodeSolution :: VarDic -> [Bits] -> Solution
 decodeSolution vdic vs
   | null vs = fmap (const 0) vdic
   | otherwise =
-    let vvec = V.fromList $ map (foldr (\a b -> bitToInt a + 2 * b) 0) $ transpose $ map U.toList vs
+    let vvec =
+          -- FIXME: This part smells. Fix it!
+          V.fromList $
+            map (foldr (\a b -> bitToInt a + 2 * b) 0) $
+              transpose $
+                map bitList vs
      in M.mapWithKey (const $ fromMaybe 0 . (vvec V.!?) . fromInteger) vdic
 
-getDFASolution :: (Ord a, Hashable a, Alternative f) => VarDic -> DFA a (U.Vector Bit) -> f Solution
+getDFASolution :: (Ord a, Hashable a, Alternative f) => VarDic -> DFA a Bits -> f Solution
 getDFASolution vdic dfa =
   let ss = walk dfa
    in asum $
