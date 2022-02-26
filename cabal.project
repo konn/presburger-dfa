@@ -1,0 +1,3 @@
+packages: 
+  presburger-dfa.cabal
+  presburger/presburger.cabal

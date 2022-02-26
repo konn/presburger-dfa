@@ -1,0 +1,105 @@
+name: Haskell CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build:
+    name: "Build"
+    runs-on: ubuntu-20.04
+    env:
+      ghcVer: "8.10.7"
+
+    steps:
+    - uses: actions/checkout@v2
+    - uses: haskell/actions/setup@v1.2.9
+      with:
+        ghc-version: '${{ env.ghcVer }}'
+        cabal-version: '3.4.0.0'
+
+    - name: Cache Global .cabal
+      uses: actions/cache@v1
+      env:
+        cache-name: cache-cabal
+      with:
+        path: ~/.cabal
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.ghcVer }}-${{ hashFiles('**/*.cabal') }}-${{ hashFiles('**/cabal.project') }}
+        restore-keys: |
+          ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.ghcVer }}-
+
+    - name: Local dist-newstyle
+      uses: actions/cache@v1
+      env:
+        cache-name: cache-dist
+      with:
+        path: dist-newstyle
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.ghcVer }}-${{ hashFiles('**/*.cabal') }}-${{ hashFiles('**/cabal.project') }}-${{ hashFiles('**/*.hs') }}
+        restore-keys: |
+          ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.ghcVer }}-${{ hashFiles('**/*.cabal') }}-${{ hashFiles('**/cabal.project') }}-
+          ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.ghcVer }}-
+
+    - name: Install dependencies
+      run: |
+        cabal v2-update
+        cabal v2-build --only-dependencies --enable-tests --enable-benchmarks
+    - name: Build
+      run: cabal build --enable-tests --enable-benchmarks all
+    - name: Collect test and benchmark binaries
+      run: |
+        mkdir -p test-bins
+        cp "$(cabal list-bin presburger-dfa-test)" "test-bins/"
+        mkdir -p bench-bins
+        cp "$(cabal list-bin solve-bench)" "bench-bins/"
+    - name: Upload test binary
+      uses: actions/upload-artifact@v2
+      with:
+        name: test-bins
+        path: "test-bins/"
+    - name: Upload bench binary
+      uses: actions/upload-artifact@v2
+      with:
+        name: bench-bins
+        path: "bench-bins/"
+
+  test:
+    name: "Test"
+    runs-on: ubuntu-20.04
+    needs:
+    - build
+    steps:
+    - name: Download test binaries.
+      uses: actions/download-artifact@v2
+      with:
+        name: test-bins
+        path: ./test-bins
+    - name: Run tests
+      run: |
+        chmod +x ./test-bins/presburger-dfa-test
+        ./test-bins/presburger-dfa-test
+
+  bench:
+    name: "Bench"
+    runs-on: ubuntu-20.04
+    needs:
+    - build
+    steps:
+    - name: Download bench binaries
+      uses: actions/download-artifact@v2
+      with:
+        name: bench-bins
+        path: ./bench-bins
+    - name: Run benchmarks
+      run: |
+        chmod +x ./bench-bins/solve-bench
+        mkdir -p bench-results/
+        ./bench-bins/solve-bench \
+          --csv bench-results/bench.csv \
+          --svg bench-results/bench.svg
+    - name: Upload benchmark results
+      uses: actions/upload-artifact@v2
+      with:
+        name: bench-results
+        path: "bench-results/" 

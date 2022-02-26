@@ -1,0 +1,25 @@
+name: presburger
+version: "0.6.2.0"
+synopsis: Presburger Arithmetic Solver
+category: Math, Type System
+author: Hiromi ISHII
+maintainer: konn.jinro _at_ gmail.com
+license: BSD3
+tested-with: GHC==8.6.5 GHC==8.8.4 GHC==8.10.7 GHC==9.0.1 GHC==9.2.1
+ghc-options:
+  - -Wall
+  - -Wno-dodgy-imports
+
+dependencies:
+- base
+
+library:
+  source-dirs:
+    - src
+  exposed-modules:
+    - Data.Integer.SAT
+  dependencies:
+    - base >=4.7 && <5
+    - containers
+    - deepseq
+    - pretty
