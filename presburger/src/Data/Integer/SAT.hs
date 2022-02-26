@@ -1,5 +1,8 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE Safe #-}
 
@@ -47,11 +50,13 @@ module Data.Integer.SAT
 where
 
 import Control.Applicative (Alternative (..), Applicative (..), (<$>))
+import Control.DeepSeq (NFData (rnf))
 import Control.Monad (MonadPlus (..), ap, guard, liftM)
 import Data.List (partition)
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Maybe (fromMaybe, mapMaybe, maybeToList)
+import GHC.Generics (Generic)
 import Text.PrettyPrint
 import Prelude hiding ((<>))
 
@@ -149,7 +154,8 @@ data Prop
   | Expr :> Expr
   | Expr :<= Expr
   | Expr :>= Expr
-  deriving (Read, Show, Ord, Eq)
+  deriving (Read, Show, Ord, Eq, Generic)
+  deriving anyclass (NFData)
 
 {- | The type of integer expressions.
  Variable names must be non-negative.
@@ -177,7 +183,8 @@ data Expr
     Min Expr Expr
   | -- | Maximum of two arguments
     Max Expr Expr
-  deriving (Read, Show, Ord, Eq)
+  deriving (Read, Show, Ord, Eq, Generic)
+  deriving anyclass (NFData)
 
 prop :: Prop -> S ()
 prop PTrue = return ()
@@ -851,6 +858,10 @@ apSubst t =
 
 data Name = UserName !Int | SysName !Int
   deriving (Read, Show, Eq, Ord)
+
+instance NFData Name where
+  rnf (UserName n) = rnf n
+  rnf (SysName n) = rnf n
 
 ppName :: Name -> Doc
 ppName (UserName x) = text "u" <> int x

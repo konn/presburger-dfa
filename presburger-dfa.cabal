@@ -27,6 +27,7 @@ library
       base                  >=4.7 && <5
     , containers
     , deepseq
+    , dlist
     , hashable
     , transformers
     , uniplate
@@ -74,7 +75,9 @@ benchmark solve-bench
 
   build-depends:
       base
+    , containers
     , deepseq
+    , dlist
     , hashable
     , presburger
     , presburger-dfa
