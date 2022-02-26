@@ -1,0 +1,6 @@
+resolver: nightly-2021-11-06
+
+flags: {}
+packages:
+- "ghc-typelits-presburger"
+- "singletons-presburger"
