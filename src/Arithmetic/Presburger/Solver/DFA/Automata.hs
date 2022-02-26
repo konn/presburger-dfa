@@ -167,7 +167,7 @@ expandLetters cs d0 =
             , q <- HS.toList $ states d0
             , not ((Normal q, c) `Set.member` M.keysSet trans)
             ]
-          `M.union` fromList [((Trap, c), Trap) | c <- fromList $ cs ++ letters d0]
+          `M.union` fromList [((Trap, c), Trap) | c <- cs ++ letters d0]
    in DFA {..}
 
 changeState :: (Ord s, Ord c, Hashable s) => (t -> s) -> DFA t c -> DFA s c

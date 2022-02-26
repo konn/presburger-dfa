@@ -27,10 +27,9 @@ import Control.Monad.Trans.State.Strict (StateT, evalState, evalStateT, get, get
 import Data.Functor.Identity (Identity)
 import Data.Hashable (Hashable)
 import qualified Data.Map.Strict as M
-import Data.Vector (Vector)
-import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as U
 
-type Letter = Vector Bit
+type Letter = Bits
 
 newtype SolverT m a = SolverT {runSolverT_ :: StateT SolverState m a}
   deriving (Monad, Applicative, Functor)
@@ -47,7 +46,7 @@ initialState :: SolverState
 initialState =
   SolverState
     { dfa = Nothing
-    , varsDic = M.fromList []
+    , varsDic = mempty
     , varCount = 0
     }
 
@@ -67,12 +66,12 @@ updateVar ident = SolverT $ do
           , dfa = padCharLast <$> dfa
           }
 
-padCharLast :: Ord s => DFA s (Vector Bit) -> DFA s (Vector Bit)
+padCharLast :: Ord s => DFA s Bits -> DFA s Bits
 padCharLast DFA {transition = tr, ..} =
   let transition =
         M.fromList $
           concat
-            [ [((q, l `V.snoc` O), p), ((q, l `V.snoc` I), p)]
+            [ [((q, l `U.snoc` O), p), ((q, l `U.snoc` I), p)]
             | ((q, l), p) <- M.toList tr
             ]
    in DFA {..}
@@ -108,7 +107,7 @@ currentSolution :: (Alternative f, Monad m) => SolverT m (f Solution)
 currentSolution = maybe (return $ pure M.empty) solveDFA =<< currentDFA
 {-# INLINE currentSolution #-}
 
-solveDFA :: (Monad m, Ord a, Alternative f, Hashable a) => DFA a (Vector Bit) -> SolverT m (f Solution)
+solveDFA :: (Monad m, Ord a, Alternative f, Hashable a) => DFA a Bits -> SolverT m (f Solution)
 solveDFA d = SolverT $ gets $ \s -> getDFASolution (varsDic s) d
 {-# INLINE solveDFA #-}
 

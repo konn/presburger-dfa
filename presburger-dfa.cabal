@@ -25,10 +25,12 @@ library
   other-modules:    Arithmetic.Presburger.Solver.DFA.Types
   build-depends:
       base                  >=4.7 && <5
+    , bitvec
     , containers
     , deepseq
     , dlist
     , hashable
+    , hybrid-vectors
     , transformers
     , uniplate
     , unordered-containers

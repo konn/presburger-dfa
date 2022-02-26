@@ -48,6 +48,7 @@ import Arithmetic.Presburger.Solver.DFA.Types
 import Control.Applicative (Alternative)
 import Control.Arrow (first)
 import Control.Monad.Trans.State.Strict (State, execState, get, gets, put)
+import Data.Bit
 import Data.DList (DList)
 import qualified Data.DList as DL
 import Data.Either (partitionEithers)
@@ -60,8 +61,8 @@ import Data.Maybe (fromMaybe)
 import qualified Data.Sequence as S
 import Data.Set (Set)
 import qualified Data.Set as Set
-import Data.Vector (Vector)
 import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as U
 import Unsafe.Coerce (unsafeCoerce)
 
 {- |
@@ -214,7 +215,7 @@ buildDFAWith vdic (Ex v t)
     let idx = toInteger $ M.size vdic
         var = Anonymous $ 1 + maximum ((-1) : [i | Anonymous i <- M.keys vdic])
         dfa = buildDFAWith (M.insert var idx vdic) $ subst v var t
-     in changeLetter (uncurry (V.++)) $
+     in changeLetter (uncurry (U.++)) $
           minimize $
             renumberStates $
               determinize $
@@ -239,10 +240,10 @@ freeVars (for' :=> for2) = freeVars for' <> freeVars for2
 freeVars (Ex bound for') = Set.delete bound $ freeVars for'
 freeVars (Any bound for') = Set.delete bound $ freeVars for'
 
-splitNth :: Integer -> Vector a -> ((Vector a, Vector a), a)
+splitNth :: U.Unbox a => Integer -> U.Vector a -> ((U.Vector a, U.Vector a), a)
 splitNth n v =
-  let (hd, tl) = V.splitAt (fromInteger n) v
-   in ((hd, V.tail tl), V.head tl)
+  let (hd, tl) = U.splitAt (fromInteger n) v
+   in ((hd, U.tail tl), U.head tl)
 
 type BuildingEnv = (Index, M.Map Ident Index)
 
@@ -256,7 +257,7 @@ getIdx ident =
       return i
 
 data Atomic = Atomic
-  { coeffs :: Vector Integer
+  { coeffs :: V.Vector Integer
   , upperBound :: Integer
   }
   deriving (Read, Show, Eq, Ord)
@@ -273,9 +274,9 @@ atomicToDFA ::
   -- | Is final state?
   (Integer -> Bool) ->
   -- | Candidate reducer
-  (Integer -> Vector Bit -> Bool) ->
+  (Integer -> U.Vector Bit -> Bool) ->
   Atomic ->
-  DFA Integer (Vector Bit)
+  DFA Integer (U.Vector Bit)
 atomicToDFA chkFinal reduce Atomic {..} =
   let trans = loop (S.singleton upperBound) HS.empty M.empty
       dfa0 =
@@ -286,7 +287,7 @@ atomicToDFA chkFinal reduce Atomic {..} =
           }
    in renumberStates $ minimize $ expandLetters inputs $ dfa0 {final = HS.filter chkFinal (states dfa0)}
   where
-    inputs = V.replicateM (V.length coeffs) [O, I]
+    inputs = U.replicateM (V.length coeffs) [O, I]
     loop (S.viewl -> k S.:< ws) qs trans =
       let qs' = HS.insert k qs
           targs =
@@ -309,14 +310,14 @@ substitute dic (e1 :+ e2) = substitute dic e1 + substitute dic e2
 substitute dic (e1 :- e2) = substitute dic e1 - substitute dic e2
 substitute dic (e1 :* e2) = e1 * substitute dic e2
 
-decodeSolution :: VarDic -> [Vector Bit] -> Solution
+decodeSolution :: VarDic -> [U.Vector Bit] -> Solution
 decodeSolution vdic vs
   | null vs = fmap (const 0) vdic
   | otherwise =
-    let vvec = V.fromList $ map (foldr (\a b -> bitToInt a + 2 * b) 0) $ transpose $ map V.toList vs
+    let vvec = V.fromList $ map (foldr (\a b -> bitToInt a + 2 * b) 0) $ transpose $ map U.toList vs
      in M.mapWithKey (const $ fromMaybe 0 . (vvec V.!?) . fromInteger) vdic
 
-getDFASolution :: (Ord a, Hashable a, Alternative f) => VarDic -> DFA a (Vector Bit) -> f Solution
+getDFASolution :: (Ord a, Hashable a, Alternative f) => VarDic -> DFA a (U.Vector Bit) -> f Solution
 getDFASolution vdic dfa =
   let ss = walk dfa
    in asum $

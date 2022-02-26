@@ -8,6 +8,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -19,10 +20,12 @@
 module Arithmetic.Presburger.Solver.DFA.Types where
 
 import Control.DeepSeq (NFData (rnf))
+import Data.Bit (Bit (Bit))
 import Data.Data (Data)
 import Data.Typeable (Typeable)
-import Data.Vector (Vector)
 import qualified Data.Vector as V
+import qualified Data.Vector.Hybrid as HV
+import qualified Data.Vector.Unboxed as U
 import GHC.Generics (Generic)
 
 data Ident
@@ -91,8 +94,13 @@ instance Show Ident where
   show (Ident x) = x
   show (Anonymous i) = "_[" ++ show i ++ "]"
 
-data Bit = O | I
-  deriving (Read, Show, Eq, Ord)
+pattern O :: Bit
+pattern O = Bit False
+
+pattern I :: Bit
+pattern I = Bit True
+
+{-# COMPLETE I, O #-}
 
 data Mode = Raw | Extended
   deriving (Read, Show, Eq, Ord)
@@ -210,7 +218,11 @@ a .* I = a
 _ .* O = 0
 {-# INLINE (.*) #-}
 
-(.*.) :: Num a => Vector a -> Vector Bit -> a
-as .*. bs = V.sum $ V.zipWith (.*) as bs
+(.*.) :: (Num a) => V.Vector a -> U.Vector Bit -> a
+as .*. bs = HV.foldl' (\acc (l, r) -> acc + l .* r) 0 $ HV.unsafeZip as bs
 
-type Bits = Vector Bit
+-- Why this cannot be just a IntSet?
+-- This was because we need the un/shifting operation.
+-- It requires some reallocation in the vector case.
+-- Perhaps we can make use of Succ-less de Bruijn?
+type Bits = U.Vector Bit
