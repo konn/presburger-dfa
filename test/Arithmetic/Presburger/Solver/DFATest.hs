@@ -32,16 +32,29 @@ test_trivial =
 natToInt :: Natural -> Integer
 natToInt = toInteger
 
-prop_solve_atomLeq :: Integer -> Integer -> Integer -> Property
+prop_solve_atomLeq :: Natural -> Integer -> Integer -> Property
 prop_solve_atomLeq c d ub =
-  let target = abs c :* Var n + d :* Var m
+  let target = natToInt c :* Var n + d :* Var m
       anss = solve (target :<= Num ub) :: [Solution]
-   in (null anss .&&. forAll arbitrary (\e f -> abs c * natToInt e + d * natToInt f > ub))
+   in (null anss .&&. forAll arbitrary (\e f -> natToInt c * natToInt e + d * natToInt f > ub))
         .||. (not (null anss) .&&. conjoin [substitute sol target <= ub | sol <- anss])
 
-prop_solve_atomEq :: Integer -> Integer -> Integer -> Property
+test_regressions :: TestTree
+test_regressions =
+  testGroup
+    "Regression tests"
+    [ testCase "solves 2*n - m == 1" $ do
+        let expr = 2 * Var n - Var m
+            sols = solve (expr :== 1) :: [Solution]
+        not (null sols) @? "Solution not found!"
+        substitute (head sols) expr @?= 1
+    ]
+
+prop_solve_atomEq :: Natural -> Integer -> Integer -> Property
 prop_solve_atomEq c d ub =
-  let target = abs c :* Var n + d :* Var m
+  let target = natToInt c :* Var n + d :* Var m
       anss = solve (target :== Num ub) :: [Solution]
-   in (null anss .&&. forAll arbitrary (\e f -> abs c * natToInt e + d * natToInt f /= ub))
-        .||. (not (null anss) .&&. conjoin [substitute sol target === ub | sol <- anss])
+   in counterexample "empty case" (null anss .&&. forAll arbitrary (\e f -> natToInt c * natToInt e + d * natToInt f =/= ub))
+        .||. counterexample
+          "invalid solution found"
+          (not (null anss) .&&. conjoin [substitute sol target === ub | sol <- anss])
