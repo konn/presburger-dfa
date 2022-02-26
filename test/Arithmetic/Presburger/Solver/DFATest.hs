@@ -99,6 +99,7 @@ test_regressions =
     [ solvesEq (2 * Var n - Var m) 1
     , solvesEq (2 :* Var n :- 3 :* Var m) 5
     , solvesLeq (2 :* Var n :- 3 :* Var m) 5
+    , solvesEq (3 * Var n + 2 * Var m) 5
     , refutes $
         (2 :* Var n :- 3 :* Var m :== 5)
           :/\ (3 :* Var n :+ (2 :* Var m :: Expr 'Extended) :== 13)
