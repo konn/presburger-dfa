@@ -1,8 +1,7 @@
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE PartialTypeSignatures #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TupleSections #-}
-{-# LANGUAGE ViewPatterns #-}
+{-# OPTIONS_GHC -Wno-partial-type-signatures #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
 module Arithmetic.Presburger.Solver.DFATest where
@@ -39,15 +38,30 @@ prop_solve_atomLeq c d ub =
    in (null anss .&&. forAll arbitrary (\e f -> natToInt c * natToInt e + d * natToInt f > ub))
         .||. (not (null anss) .&&. conjoin [substitute sol target <= ub | sol <- anss])
 
+solves :: Expr s -> TestTree
+solves expr = testCase ("solves " <> show expr) $ do
+  let sols = solve (expr :== 1) :: [Solution]
+  not (null sols) @? "Solution not found!"
+  substitute (head sols) expr @?= 1
+
+solvesLeq :: Expr s -> Expr s -> TestTree
+solvesLeq lhs rhs = testCase ("solves " <> show ineq) $ do
+  let sols = solve ineq :: [Solution]
+  not (null sols) @? "Solution not found!"
+  let subs = substitute (head sols)
+      lhs' = subs lhs
+      rhs' = subs rhs
+  lhs' <= rhs' @? "Invalid solution: " <> show lhs' <> " > " <> show rhs'
+  where
+    ineq :: Formula _
+    ineq = lhs :<= rhs
+
 test_regressions :: TestTree
 test_regressions =
   testGroup
     "Regression tests"
-    [ testCase "solves 2*n - m == 1" $ do
-        let expr = 2 * Var n - Var m
-            sols = solve (expr :== 1) :: [Solution]
-        not (null sols) @? "Solution not found!"
-        substitute (head sols) expr @?= 1
+    [ solves $ 2 * Var n - Var m
+    , solvesLeq (2 :* Var n :- 3 :* Var m) 5
     ]
 
 prop_solve_atomEq :: Natural -> Integer -> Integer -> Property
