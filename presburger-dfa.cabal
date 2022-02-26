@@ -1,59 +1,78 @@
-name:                presburger-dfa
-version:             0.1.0.0
-synopsis:            Initial project template from stack
-description:         Please see README.md
-homepage:            https://github.com/konn/presburger-dfa#readme
-license:             BSD3
-license-file:        LICENSE
-author:              Hiromi ISHII
-maintainer:          konn.jinro _at_ gmail.com
-copyright:           2015 (c) Hiromi ISHII
-category:            Math
-build-type:          Simple
+name:          presburger-dfa
+version:       0.1.0.0
+synopsis:      Initial project template from stack
+description:   Please see README.md
+homepage:      https://github.com/konn/presburger-dfa#readme
+license:       BSD3
+license-file:  LICENSE
+author:        Hiromi ISHII
+maintainer:    konn.jinro _at_ gmail.com
+copyright:     2015 (c) Hiromi ISHII
+category:      Math
+build-type:    Simple
+
 -- extra-source-files:
-cabal-version:       >=1.10
+cabal-version: >=1.10
 
 library
-  hs-source-dirs:      src
-  exposed-modules:     Arithmetic.Presburger.Solver.DFA
-                     , Arithmetic.Presburger.Solver.DFA.Monadic
-                     , Arithmetic.Presburger.Solver.DFA.Automata
-  other-modules:       Arithmetic.Presburger.Solver.DFA.Types
-  build-depends:       base >= 4.7 && < 5
-                     , uniplate
-                     , vector
-                     , unordered-containers
-                     , containers
-                     , transformers
-                     , hashable
-  default-language:    Haskell2010
-  ghc-options:         -Wall
+  default-language: Haskell2010
+  hs-source-dirs:   src
+  exposed-modules:
+    Arithmetic.Presburger.Solver.DFA
+    Arithmetic.Presburger.Solver.DFA.Automata
+    Arithmetic.Presburger.Solver.DFA.Monadic
 
--- executable presburger-dfa-exe
---   hs-source-dirs:      app
---   main-is:             Main.hs
---   ghc-options:         -threaded -rtsopts -with-rtsopts=-N -Wall
---   build-depends:       base
---                      , presburger-dfa
---   default-language:    Haskell2010
+  other-modules:    Arithmetic.Presburger.Solver.DFA.Types
+  build-depends:
+      base                  >=4.7 && <5
+    , containers
+    , deepseq
+    , hashable
+    , transformers
+    , uniplate
+    , unordered-containers
+    , vector
+
+  ghc-options:      -Wall
 
 test-suite presburger-dfa-test
-  type:                exitcode-stdio-1.0
-  hs-source-dirs:      test
-  main-is:             Spec.hs
-  other-modules:       Arithmetic.Presburger.Solver.DFA.AutomataSpec
-                       Arithmetic.Presburger.Solver.DFASpec
-  build-depends:       base
-                     , presburger-dfa
-                     , hspec
-                     , tasty-discover
-                     , unordered-containers
-                     , containers
-                     , QuickCheck
-                     , quickcheck-instances
-                     , hashable
-  ghc-options:         -threaded -rtsopts -with-rtsopts=-N -Wall
-  default-language:    Haskell2010
+  default-language:   Haskell2010
+  type:               exitcode-stdio-1.0
+  hs-source-dirs:     test
+  main-is:            test.hs
+  other-modules:
+    Arithmetic.Presburger.Solver.DFA.AutomataTest
+    Arithmetic.Presburger.Solver.DFATest
+    Arithmetic.Presburger.Solver.Test.Shared
+
+  build-tool-depends: tasty-discover:tasty-discover -any
+  build-depends:
+      base
+    , containers
+    , hashable
+    , presburger-dfa
+    , QuickCheck
+    , quickcheck-instances
+    , tasty
+    , tasty-hunit
+    , tasty-quickcheck
+    , unordered-containers
+
+  ghc-options:        -threaded -rtsopts -with-rtsopts=-N -Wall
+
+benchmark solve-bench
+  default-language: Haskell2010
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   benchmarks/src
+  main-is:          Main.hs
+  build-depends:
+      base
+    , deepseq
+    , hashable
+    , presburger-dfa
+    , tasty-bench
+
+-- , presburger
 
 source-repository head
   type:     git

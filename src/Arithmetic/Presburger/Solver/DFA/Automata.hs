@@ -150,6 +150,15 @@ changeState f DFA{initial = ini, final = fs, transition = trans } =
       transition = M.mapKeys (first f) $ fmap f trans
   in DFA{..}
 
+split :: (Ord s, Ord c, Eq s, Hashable s)
+      => DFA s c -> (c, HashSet s) -> HashSet s -> Maybe (HashSet s, HashSet s)
+split d (c, b') b =
+  let (b0, b1) = partition (maybe False (`HS.member` b') . flip (feed d) c) $ HS.toList b
+  in if null b0 || null b1
+     then Nothing
+     else Just (fromList b0, fromList b1)
+{-# INLINE split #-}
+
 partiteDFA :: (Ord s, Ord c, Eq s, Hashable s) => DFA s c -> [HashSet s]
 partiteDFA d@DFA{..}
   | null final || states d == final = [states d]
@@ -158,22 +167,17 @@ partiteDFA d@DFA{..}
     in loop [(l, smaller fs qs) | l <- chars] [fs, qs]
   where
     chars = letters d
-    split (c, b') b =
-      let (b0, b1) = partition (maybe False (`HS.member` b') . flip (feed d) c) $ toList b
-      in if null b0 || null b1
-      then Nothing
-      else Just (fromList b0, fromList b1)
     loop [] qs = qs
     loop ((a, b') : ws) ps =
       let (ws', ps') = foldr step (ws, []) ps
           step b (wsc, psc) =
-            case split (a, b') b of
+            case split d (a, b') b of
               Nothing       -> (wsc, b : psc)
               Just (b0, b1) ->
                 let refine c ww
-                      | (xs, _ : ys) <- break (== (c, b)) ww = (c, b0) : (c, b1) : xs ++ ys
+                      | (xs, _ : ys) <- {-# SCC "refine/break" #-}break (== (c, b)) ww = {-# SCC "refine/cat" #-}(c, b0) : (c, b1) : xs ++ ys
                       | otherwise = (c, smaller b0 b1)  : ww
-                in (foldr refine wsc chars, [b0, b1] ++ psc)
+                in ({-# SCC "refine/foldr" #-}foldr refine wsc chars, {-# SCC "psupd" #-} [b0, b1] ++ psc)
       in loop ws' (ps')
 
 smaller :: HashSet a -> HashSet a -> HashSet a
@@ -182,7 +186,7 @@ smaller s t = minimumBy (comparing HS.size) [s, t]
 minimize :: (Ord c, Ord q, Hashable q) => DFA q c -> DFA q c
 minimize dfa =
   let reps = partiteDFA dfa
-  in discardRedundant $ quotient dfa reps
+  in quotient dfa reps
 
 discardRedundant :: (Ord s, Ord c, Eq s, Hashable s) => DFA s c -> DFA s c
 discardRedundant d@DFA{final = fs, transition = tr, initial} =
@@ -195,8 +199,8 @@ complement :: (Ord q, Ord c, Hashable q, Eq q) => DFA q c -> DFA q c
 complement d@DFA{..} = minimize $ d { final = states d `HS.difference`  final }
 
 feed :: (Ord c, Ord q) => DFA q c -> q -> c -> Maybe q
-feed DFA{..} q i =
-  M.lookup (q, i) transition
+feed DFA{..} q i = M.lookup (q, i) transition
+{-# INLINE feed #-}
 
 walk :: (Ord c, Ord q) => DFA q c -> Map q (Seq c)
 walk d@DFA{..} = execState (visit S.empty initial) M.empty
