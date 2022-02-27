@@ -35,7 +35,7 @@ newtype SolverT m a = SolverT {runSolverT_ :: StateT SolverState m a}
   deriving (Monad, Applicative, Functor)
 
 data SolverState = SolverState
-  { dfa :: Maybe (DFA Integer Letter)
+  { dfa :: Maybe (DFA MachineState Letter)
   , varsDic :: M.Map Ident Integer
   , varCount :: Integer
   }
@@ -50,7 +50,7 @@ initialState =
     , varCount = 0
     }
 
-currentDFA :: Monad m => SolverT m (Maybe (DFA Integer Letter))
+currentDFA :: Monad m => SolverT m (Maybe (DFA MachineState Letter))
 currentDFA = SolverT $ gets dfa
 
 updateVar :: Monad m => Ident -> SolverT m ()
@@ -85,7 +85,7 @@ runSolver :: Solver a -> a
 runSolver s = evalState (runSolverT_ s) initialState
 {-# INLINE runSolver #-}
 
-toDFA :: Monad m => Formula k -> SolverT m (DFA Integer Bits)
+toDFA :: Monad m => Formula k -> SolverT m (DFA MachineState Bits)
 toDFA f = do
   let f' = encode f
   mapM_ updateVar (freeVars f')
@@ -111,10 +111,10 @@ solveDFA :: (Monad m, Ord a, Alternative f, Hashable a) => DFA a Bits -> SolverT
 solveDFA d = SolverT $ gets $ \s -> getDFASolution (varsDic s) d
 {-# INLINE solveDFA #-}
 
-viewWithFormula :: Monad m => Formula k -> SolverT m (DFA Integer Bits)
+viewWithFormula :: Monad m => Formula k -> SolverT m (DFA MachineState Bits)
 viewWithFormula f = do
   d <- toDFA f
-  maybe d (renumberStates . minimize . intersection d) <$> currentDFA
+  maybe d (minimize . intersectionWith pairTrappedState d) <$> currentDFA
 {-# INLINE viewWithFormula #-}
 
 findSolutionsFor :: (Alternative f, Monad m) => Formula k -> SolverT m (f Solution)

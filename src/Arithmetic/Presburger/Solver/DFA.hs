@@ -1,4 +1,8 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
@@ -15,6 +19,9 @@ module Arithmetic.Presburger.Solver.DFA
     Expr' (..),
     Expr,
     Formula' (..),
+    MachineState,
+    fromTrapped,
+    pairTrappedState,
     Formula,
     Ident (..),
     Solution,
@@ -47,7 +54,9 @@ import Arithmetic.Presburger.Solver.DFA.Automata
 import Arithmetic.Presburger.Solver.DFA.Types
 import Control.Applicative (Alternative)
 import Control.Arrow (first)
+import Control.DeepSeq (NFData)
 import Control.Monad.Trans.State.Strict (State, execState, get, gets, put)
+import qualified Data.Bifunctor as Bi
 import Data.Bit
 import Data.DList (DList)
 import qualified Data.DList as DL
@@ -55,7 +64,9 @@ import Data.Either (partitionEithers)
 import Data.Foldable (asum, foldl', toList)
 import qualified Data.HashSet as HS
 import Data.Hashable (Hashable)
+import qualified Data.IntSet as IS
 import Data.List (transpose)
+import qualified Data.Map as Map
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
 import qualified Data.Sequence as S
@@ -63,6 +74,7 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
+import GHC.Generics (Generic)
 import Unsafe.Coerce (unsafeCoerce)
 
 {- |
@@ -177,7 +189,7 @@ type Index = Integer
 
 type VarDic = M.Map Ident Integer
 
-buildDFA :: Formula 'Raw -> (DFA Integer Bits, VarDic)
+buildDFA :: Formula 'Raw -> (DFA MachineState Bits, VarDic)
 buildDFA f =
   let (_, varDic) = execState (mapM_ getIdx $ freeVars f) (0, M.empty)
    in (buildDFAWith varDic f, varDic)
@@ -193,7 +205,7 @@ toAtomic vdic a b =
       cfs = V.generate len $ \i -> fromMaybe 0 (lookup (toInteger i) cds)
    in Atomic cfs ub
 
-buildDFAWith :: VarDic -> Formula 'Raw -> DFA Integer Bits
+buildDFAWith :: VarDic -> Formula 'Raw -> DFA MachineState Bits
 buildDFAWith vdic (a :<= b) =
   let atomic = toAtomic vdic a b
    in leqToDFA atomic
@@ -204,11 +216,11 @@ buildDFAWith vdic (Not t) = complement $ buildDFAWith vdic t
 buildDFAWith vdic (t1 :/\ t2) =
   let d1 = buildDFAWith vdic (encode t1)
       d2 = buildDFAWith vdic (encode t2)
-   in renumberStates $ minimize $ d1 `intersection` d2
+   in minimize $ intersectionWith pairTrappedState d1 d2
 buildDFAWith vdic (t1 :\/ t2) =
   let d1 = buildDFAWith vdic (encode t1)
       d2 = buildDFAWith vdic (encode t2)
-   in renumberStates $ minimize $ d1 `union` d2
+   in minimize $ unionWith pairTrappedState d1 d2
 buildDFAWith vdic (Ex v t)
   | v `notElem` freeVars t = buildDFAWith vdic t
   | otherwise =
@@ -217,9 +229,8 @@ buildDFAWith vdic (Ex v t)
         dfa = buildDFAWith (M.insert var idx vdic) $ subst v var t
      in changeLetter (uncurry (U.++)) $
           minimize $
-            renumberStates $
-              determinize $
-                projDFA $ changeLetter (splitNth idx) dfa
+            determinizeWith Many $
+              projDFA $ changeLetter (splitNth idx) dfa
 
 fresh :: Formula a -> Ident
 fresh e = Anonymous $ 1 + maximum ((-1) : [i | Anonymous i <- Set.toList $ allVars e])
@@ -262,41 +273,61 @@ data Atomic = Atomic
   }
   deriving (Read, Show, Eq, Ord)
 
-type MachineState = Integer
+data MachineState
+  = RawIdx !Int
+  | Bot
+  | Pr !MachineState !MachineState
+  | Many ![MachineState]
+  deriving (Show, Eq, Ord, Generic)
+  deriving anyclass (Hashable, NFData)
+
+fromTrapped :: Trapped MachineState -> MachineState
+fromTrapped Trap = Bot
+fromTrapped (Normal t) = t
+
+pairTrappedState :: Trapped MachineState -> Trapped MachineState -> MachineState
+pairTrappedState l r = Pr (fromTrapped l) (fromTrapped r)
 
 eqToDFA :: Atomic -> DFA MachineState Bits
-eqToDFA a@Atomic {..} = atomicToDFA (== 0) (\k xi -> even (k - coeffs .*. xi)) a
+eqToDFA a@Atomic {..} = atomicToDFA (== 0) (\k xi -> even (k - fromIntegral (coeffs .*. xi))) a
 
 leqToDFA :: Atomic -> DFA MachineState Bits
 leqToDFA = atomicToDFA (>= 0) (const $ const True)
 
 atomicToDFA ::
   -- | Is final state?
-  (Integer -> Bool) ->
+  (Int -> Bool) ->
   -- | Candidate reducer
-  (Integer -> Bits -> Bool) ->
+  (Int -> Bits -> Bool) ->
   Atomic ->
-  DFA Integer Bits
+  DFA MachineState Bits
 atomicToDFA chkFinal reduce Atomic {..} =
-  let trans = loop (S.singleton upperBound) HS.empty M.empty
+  let trans = loop (S.singleton $ fromIntegral upperBound) IS.empty mempty
       dfa0 =
         DFA
-          { initial = upperBound
+          { initial = RawIdx $ fromIntegral upperBound
           , final = HS.empty
           , transition = trans
           }
-   in renumberStates $ minimize $ expandLetters inputs $ dfa0 {final = HS.filter chkFinal (states dfa0)}
+   in minimize $
+        expandLettersWith fromTrapped inputs $
+          dfa0 {final = HS.filter (onRawIdx chkFinal) (states dfa0)}
   where
+    onRawIdx p (RawIdx i) = p i
+    onRawIdx _ _ = False
     inputs = U.replicateM (V.length coeffs) [O, I]
     loop (S.viewl -> k S.:< ws) qs trans =
-      let qs' = HS.insert k qs
+      let qs' = IS.insert k qs
           targs =
-            map (\xi -> (xi, (k - (coeffs .*. xi)) `div` 2)) $
+            map (\xi -> (xi, (k - fromInteger (coeffs .*. xi)) `div` 2)) $
               filter (reduce k) inputs
-          trans' = M.fromList [((k, xi), j) | (xi, j) <- targs]
-          ws' = S.fromList $ filter (not . (`HS.member` qs')) (map snd targs)
-       in loop (ws S.>< ws') qs' (trans `M.union` trans')
-    loop _ _ tr = tr
+          trans' = DL.fromList [((k, xi), j) | (xi, j) <- targs]
+          ws' = S.fromList $ filter (`IS.notMember` qs') (map snd targs)
+       in loop (ws S.>< ws') qs' (trans <> trans')
+    loop _ _ tr =
+      Map.fromList $
+        map (Bi.bimap (Bi.first RawIdx) RawIdx) $
+          DL.toList tr
 
 bitToInt :: Bit -> Integer
 bitToInt O = 0

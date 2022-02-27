@@ -124,8 +124,8 @@ test_regressions =
           let n' = substitute sol (Var n)
               l' = substitute sol (Var l)
           7 * l' @?= n'
-          10 <= n' @? "n < 10"
-          n' < 20 @? "n >= 20"
+          10 <= n' @? "n = " <> show n' <> " < 10"
+          n' < 20 @? "n = " <> show n' <> " >= 20"
     , let leqL, leqR, gtL, gtR :: Expr 'Extended
           (leqL, leqR) = (2 :* Var n :- 3 :* Var m, 5)
           (gtL, gtR) = (3 :* Var n :+ (2 :* Var m :: Expr 'Extended), 14)

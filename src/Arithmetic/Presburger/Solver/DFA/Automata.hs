@@ -1,6 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ViewPatterns #-}
@@ -50,7 +51,27 @@ boolOp ::
   DFA s c ->
   DFA t c ->
   DFA (Trapped s, Trapped t) c
-boolOp op d1'0 d2'0 =
+boolOp = boolOpWith (,)
+
+boolOpWith ::
+  ( Eq s
+  , Eq t
+  , Ord s
+  , Hashable s
+  , Hashable t
+  , Ord t
+  , Eq u
+  , Ord u
+  , Hashable u
+  , Eq c
+  , Ord c
+  ) =>
+  (Trapped s -> Trapped t -> u) ->
+  (Bool -> Bool -> Bool) ->
+  DFA s c ->
+  DFA t c ->
+  DFA u c
+boolOpWith tpl op d1'0 d2'0 =
   let inputs = nub $ letters d1'0 ++ letters d2'0
       (d1, d2) = (expandLetters inputs d1'0, expandLetters inputs d2'0)
       ss =
@@ -61,7 +82,7 @@ boolOp op d1'0 d2'0 =
 
       trans =
         fromList
-          [ (((s, t), l), (s', t'))
+          [ ((tpl s t, l), tpl s' t')
           | l <- inputs
           , (s, t) <- ss
           , s' <- maybeToList (feed d1 s l)
@@ -70,10 +91,10 @@ boolOp op d1'0 d2'0 =
 
       fs =
         fromList
-          [ (s, t) | (s, t) <- ss, isFinal d1 s `op` isFinal d2 t
+          [ tpl s t | (s, t) <- ss, isFinal d1 s `op` isFinal d2 t
           ]
    in DFA
-        { initial = (initial d1, initial d2)
+        { initial = tpl (initial d1) (initial d2)
         , transition = trans
         , final = fs
         }
@@ -81,8 +102,24 @@ boolOp op d1'0 d2'0 =
 intersection :: (Eq c, Ord c, Hashable s, Hashable t, Ord s, Ord t) => DFA s c -> DFA t c -> DFA (Trapped s, Trapped t) c
 intersection = boolOp (&&)
 
+intersectionWith ::
+  (Eq c, Ord c, Hashable s, Hashable t, Hashable u, Ord s, Ord t, Ord u) =>
+  (Trapped s -> Trapped t -> u) ->
+  DFA s c ->
+  DFA t c ->
+  DFA u c
+intersectionWith f = boolOpWith f (&&)
+
 union :: (Eq c, Ord c, Hashable s, Hashable t, Ord s, Ord t) => DFA s c -> DFA t c -> DFA (Trapped s, Trapped t) c
 union = boolOp (||)
+
+unionWith ::
+  (Eq c, Ord c, Hashable s, Hashable t, Hashable u, Ord s, Ord t, Ord u) =>
+  (Trapped s -> Trapped t -> u) ->
+  DFA s c ->
+  DFA t c ->
+  DFA u c
+unionWith f = boolOpWith f (||)
 
 data NFA s c = NFA
   { initialNFA :: s
@@ -114,21 +151,28 @@ statesNFA NFA {..} = fromList $ initialNFA : concat [t : HS.toList s | ((t, _), 
 
 -- | Naive Subset construction
 determinize :: (Ord c, Eq s, Hashable s, Ord s) => NFA s c -> DFA [s] c
-determinize n@NFA {..} =
-  let sts = fromList $ map nubbing $ filterM (const [True, False]) $ HS.toList $ statesNFA n
-      final = HS.filter (any (`HS.member` finalNFA)) sts
-      initial = [initialNFA]
+determinize = determinizeWith id
+
+determinizeWith ::
+  (Ord c, Eq s, Hashable s, Ord s, Eq s', Hashable s', Ord s') =>
+  ([s] -> s') ->
+  NFA s c ->
+  DFA s' c
+determinizeWith f n@NFA {..} =
+  let sts = map (Set.toList . Set.fromList) $ filterM (const [True, False]) $ HS.toList $ statesNFA n
+      final = HS.fromList $ map f $ filter (any (`HS.member` finalNFA)) sts
+      initial = f [initialNFA]
       inputs = nub $ map snd $ M.keys transitionNFA
       transition =
         fromList
-          [ ( (ss, l)
-            , nubbing $
+          [ ( (f ss, l)
+            , f $
                 concat $
                   mapMaybe
                     (\s -> HS.toList <$> M.lookup (s, l) transitionNFA)
                     ss
             )
-          | ss <- HS.toList sts
+          | ss <- sts
           , l <- inputs
           ]
    in DFA {..}
@@ -149,25 +193,48 @@ quotient DFA {initial = ini, final = fs, transition = tr} (filter (not . HS.null
    in DFA {..}
 
 data Trapped a = Normal !a | Trap
-  deriving (Eq, Ord, Generic, Hashable)
+  deriving (Eq, Ord, Generic, Hashable, Functor, Foldable, Traversable)
+
+instance Applicative Trapped where
+  pure = Normal
+  Trap <*> _ = Trap
+  _ <*> Trap = Trap
+  Normal f <*> Normal a = Normal (f a)
+  {-# INLINE (<*>) #-}
+
+instance Monad Trapped where
+  Trap >>= _ = Trap
+  Normal a >>= f = f a
+  {-# INLINE (>>=) #-}
 
 instance (Show a) => Show (Trapped a) where
   show Trap = "⊥"
   show (Normal a) = show a
 
-expandLetters :: (Ord a1, Ord c, Hashable a1) => [c] -> DFA a1 c -> DFA (Trapped a1) c
-expandLetters cs d0 =
-  let DFA {transition = trans, ..} = changeState Normal d0
+expandLetters :: (Ord a, Ord c, Hashable a) => [c] -> DFA a c -> DFA (Trapped a) c
+expandLetters = expandLettersWith id
+
+-- Do we need this at all?
+expandLettersWith ::
+  (Ord b, Ord c, Hashable a1, Eq a1, Hashable b) =>
+  (Trapped a1 -> b) ->
+  [c] ->
+  DFA a1 c ->
+  DFA b c
+expandLettersWith unTrap cs d0 =
+  let DFA {transition = trans, ..} = changeState mapQ d0
       ls = fromList cs `Set.union` fromList (letters d0)
+      trap = unTrap Trap
+      mapQ = unTrap . Normal
       transition =
         trans
           `M.union` fromList
-            [ ((Normal q, c), Trap)
+            [ ((mapQ q, c), trap)
             | c <- Set.toList ls
             , q <- HS.toList $ states d0
-            , not ((Normal q, c) `Set.member` M.keysSet trans)
+            , not ((mapQ q, c) `Set.member` M.keysSet trans)
             ]
-          `M.union` fromList [((Trap, c), Trap) | c <- cs ++ letters d0]
+          `M.union` fromList [((trap, c), trap) | c <- cs ++ letters d0]
    in DFA {..}
 
 changeState :: (Ord s, Ord c, Hashable s) => (t -> s) -> DFA t c -> DFA s c
