@@ -116,7 +116,7 @@ test_regressions =
         [ (2 :* Var n :- 3 :* Var n, 5)
         , (3 :* Var n :+ (2 :* Var m :: Expr 'Extended), 14)
         ]
-    , testCase "finds multiply of 7 in [10, 20)" $ do
+    , testCase "finds multiply of 7 in [10, 20) (non-existential)" $ do
         let fml = Var n :== 7 :* Var l :/\ 10 :<= Var n :/\ Var n :< 20
             sols = solve fml :: [Solution]
         not (null sols) @? "No solution found!"
@@ -124,6 +124,15 @@ test_regressions =
           let n' = substitute sol (Var n)
               l' = substitute sol (Var l)
           7 * l' @?= n'
+          10 <= n' @? "n = " <> show n' <> " < 10"
+          n' < 20 @? "n = " <> show n' <> " >= 20"
+    , testCase "finds multiply of 7 in [10, 20) (existential)" $ do
+        let fml = Ex l (Var n :== 7 :* Var l) :/\ 10 :<= Var n :/\ Var n :< 20
+            sols = solve fml :: [Solution]
+        not (null sols) @? "No solution found!"
+        forM_ sols $ \sol -> do
+          let n' = substitute sol (Var n)
+          n' `mod` 7 @?= 0
           10 <= n' @? "n = " <> show n' <> " < 10"
           n' < 20 @? "n = " <> show n' <> " >= 20"
     , let leqL, leqR, gtL, gtR :: Expr 'Extended

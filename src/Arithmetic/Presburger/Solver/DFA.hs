@@ -5,7 +5,6 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -66,7 +65,7 @@ import Data.Foldable (asum, foldl', toList)
 import qualified Data.HashSet as HS
 import Data.Hashable (Hashable)
 import qualified Data.IntSet as IS
-import Data.List (foldl1', transpose)
+import Data.List (transpose)
 import qualified Data.Map as Map
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
@@ -303,7 +302,7 @@ pairTrappedState :: Trapped MachineState -> Trapped MachineState -> MachineState
 pairTrappedState l r = pairing (fromTrapped l) (fromTrapped r)
 
 manyStates :: [MachineState] -> MachineState
-manyStates = foldl1' pairing
+manyStates = foldl' pairing (MachineState 0)
 
 eqToDFA :: Atomic -> DFA MachineState Bits
 eqToDFA a@Atomic {..} = atomicToDFA (== 0) (\k xi -> even (k - fromIntegral (coeffs .*. xi))) a
