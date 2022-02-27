@@ -1,11 +1,11 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DeriveAnyClass #-}
-{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -22,6 +22,7 @@ module Arithmetic.Presburger.Solver.DFA
     MachineState,
     fromTrapped,
     pairTrappedState,
+    manyStates,
     Formula,
     Ident (..),
     Solution,
@@ -65,7 +66,7 @@ import Data.Foldable (asum, foldl', toList)
 import qualified Data.HashSet as HS
 import Data.Hashable (Hashable)
 import qualified Data.IntSet as IS
-import Data.List (transpose)
+import Data.List (foldl1', transpose)
 import qualified Data.Map as Map
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
@@ -74,7 +75,6 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
-import GHC.Generics (Generic)
 import Unsafe.Coerce (unsafeCoerce)
 
 {- |
@@ -229,7 +229,7 @@ buildDFAWith vdic (Ex v t)
         dfa = buildDFAWith (M.insert var idx vdic) $ subst v var t
      in changeLetter (uncurry (U.++)) $
           minimize $
-            determinizeWith Many $
+            determinizeWith manyStates $
               projDFA $ changeLetter (splitNth idx) dfa
 
 fresh :: Formula a -> Ident
@@ -273,20 +273,37 @@ data Atomic = Atomic
   }
   deriving (Read, Show, Eq, Ord)
 
-data MachineState
+{- data MachineState
   = RawIdx !Int
   | Bot
   | Pr !MachineState !MachineState
   | Many ![MachineState]
   deriving (Show, Eq, Ord, Generic)
   deriving anyclass (Hashable, NFData)
+ -}
+newtype MachineState = MachineState Int
+  deriving (Show, Eq, Ord)
+  deriving newtype (Hashable, NFData)
+
+pairing :: MachineState -> MachineState -> MachineState
+pairing (MachineState l) (MachineState r) =
+  MachineState $ pr (renumberNeg l) (renumberNeg r)
+  where
+    renumberNeg !m
+      | m < 0 = 2 * abs m - 1
+      | otherwise = 2 * m
+    pr !k1 !k2 = (k1 + k2) * (k1 + k2 + 1) `div` 2 + k2
 
 fromTrapped :: Trapped MachineState -> MachineState
-fromTrapped Trap = Bot
-fromTrapped (Normal t) = t
+fromTrapped Trap = MachineState 0
+fromTrapped (Normal (MachineState t)) =
+  MachineState (if t < 0 then t else t + 1)
 
 pairTrappedState :: Trapped MachineState -> Trapped MachineState -> MachineState
-pairTrappedState l r = Pr (fromTrapped l) (fromTrapped r)
+pairTrappedState l r = pairing (fromTrapped l) (fromTrapped r)
+
+manyStates :: [MachineState] -> MachineState
+manyStates = foldl1' pairing
 
 eqToDFA :: Atomic -> DFA MachineState Bits
 eqToDFA a@Atomic {..} = atomicToDFA (== 0) (\k xi -> even (k - fromIntegral (coeffs .*. xi))) a
@@ -305,7 +322,7 @@ atomicToDFA chkFinal reduce Atomic {..} =
   let trans = loop (S.singleton $ fromIntegral upperBound) IS.empty mempty
       dfa0 =
         DFA
-          { initial = RawIdx $ fromIntegral upperBound
+          { initial = MachineState $ fromIntegral upperBound
           , final = HS.empty
           , transition = trans
           }
@@ -313,8 +330,7 @@ atomicToDFA chkFinal reduce Atomic {..} =
         expandLettersWith fromTrapped inputs $
           dfa0 {final = HS.filter (onRawIdx chkFinal) (states dfa0)}
   where
-    onRawIdx p (RawIdx i) = p i
-    onRawIdx _ _ = False
+    onRawIdx p (MachineState i) = p i
     inputs = U.replicateM (V.length coeffs) [O, I]
     loop (S.viewl -> k S.:< ws) qs trans =
       let qs' = IS.insert k qs
@@ -326,7 +342,7 @@ atomicToDFA chkFinal reduce Atomic {..} =
        in loop (ws S.>< ws') qs' (trans <> trans')
     loop _ _ tr =
       Map.fromList $
-        map (Bi.bimap (Bi.first RawIdx) RawIdx) $
+        map (Bi.bimap (Bi.first MachineState) MachineState) $
           DL.toList tr
 
 bitToInt :: Bit -> Integer
